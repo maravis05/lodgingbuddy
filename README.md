@@ -89,14 +89,28 @@ a built-in default, so a partial file — or none — still runs. Set
 
 ## Sources
 
-| | |
-|---|---|
-| sykescottages.co.uk | full scrape, schema.org JSON-LD |
-| cottages.com, hoseasons.co.uk | Next.js `__NEXT_DATA__`; AWS WAF trips intermittently |
-| booking.com | URL parameters only — the page itself is WAF-locked |
+Verified against live pages on 2026-08-15. What each site gives up varies a
+lot, so this is what actually came back rather than what the adapters hope for:
 
-A Booking.com `/Share-` link redirects to a URL carrying dates and party size;
-that first hop is the data path.
+| site | how it's read | what came back |
+|---|---|---|
+| **sykescottages.co.uk** | schema.org JSON-LD, no bot wall | name, location, region, sleeps, bedrooms, bathrooms, review score, and a "from" price |
+| **booking.com** — `/Share-` link | the first 301 carries the query string | property, dates, party size |
+| **booking.com** — property URL | URL parameters | name, dates, nights, party, rooms |
+| **cottages.com** | Next.js `__NEXT_DATA__` | name, location, review score, nights |
+| **hoseasons.co.uk** | same platform as cottages.com | name and property code |
+
+**No site hands over a usable total for your dates.** Sykes publishes a "from"
+figure (shown `~`, and a 3-night stay advertised "from £1090" billed at £582).
+Booking.com only reveals the real number once you click through to book. The
+Awaze pair load pricing in a client-side widget that isn't in the page source.
+So the workflow is: capture the stay, then type the total you see at checkout —
+that number is taken as final.
+
+The two Awaze sites sit behind an AWS WAF that trips intermittently; when it
+does, the adapter falls back to what the URL alone says and keeps whatever it
+already had rather than overwriting good data with nothing. Booking.com's
+property pages are WAF-locked outright, which is why only the URL is parsed.
 
 Another brand on a platform already supported is a `[[source]]` entry in
 `config.toml`. A new platform needs an adapter in `sources.py`.
