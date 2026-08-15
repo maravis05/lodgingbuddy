@@ -1,0 +1,441 @@
+"""
+Source adapters — turn a lodging URL into a common record.
+
+Each adapter takes a URL and returns a dict using the shared schema in
+`blank_record()`. Adapters fill what they can and leave the rest None; nothing
+here guesses. A record that comes back with price=None simply needs a number
+typed in, which is the normal case for WAF-protected sites.
+
+Three tiers of what a source will give us, learned by testing rather than
+assuming:
+
+  sykescottages.co.uk   full scrape — schema.org JSON-LD, no bot wall
+  cottages.com          Next.js __NEXT_DATA__, but AWS WAF trips intermittently
+  hoseasons.co.uk       same platform as cottages.com (both are Awaze brands)
+  booking.com           URL parameters only; the page itself is WAF-locked
+
+Which domain routes to which adapter, and what each site quotes in, is in
+config.toml — an adapter here only knows how to read a page.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import http.client
+import json
+import re
+import urllib.parse
+
+import config
+
+# Status values a record can carry.
+OK = "ok"              # everything we wanted, including a price
+NEEDS_PRICE = "needs_price"  # identified the property, but no price
+BLOCKED = "blocked"    # the site refused to serve the page
+
+
+def blank_record() -> dict:
+    """The common schema. Every source produces one of these."""
+    return {
+        "source": None, "code": None, "name": None, "url": None,
+        # where
+        "location": None, "region": None, "country": None,
+        "latitude": None, "longitude": None,
+        # when / who
+        "checkin": None, "checkout": None, "nights": None,
+        "adults": None, "children": None, "rooms": None,
+        # cost
+        # `price` is whatever the site quoted. `tax_included` says whether VAT
+        # is already in it — without that flag two prices from different sites
+        # are not comparable, since UK consumer sites quote inclusive totals
+        # while Booking.com shows a US booker the ex-VAT figure.
+        "price": None, "was_price": None, "currency": None,
+        "tax_included": None, "vat_rate": config.VAT_RATE,
+        # What the property itself charges, before the OTA's currency
+        # conversion. Immune to FX markup, so it's the truest number we hold.
+        "native_price": None, "native_currency": None,
+        # "quoted"  = the site's price for these actual dates
+        # "indicative" = a "from" / headline price that may not apply
+        "price_basis": None,
+        # Which of a property's several rates this is (occupancy, cancellation).
+        "offer": None,
+        # Ways this stay's bill divides, when it isn't the trip's usual split.
+        # Left None so config.toml stays the single answer for the common case.
+        "shares": None,
+        # property shape
+        "sleeps": None, "bedrooms": None, "bathrooms": None,
+        # quality
+        "score": None, "reviews": None,
+        # practical
+        "checkin_time": None, "checkout_time": None,
+        # ours
+        "note": None, "status": NEEDS_PRICE, "captured_at": None,
+    }
+
+
+def apply_site(rec: dict, site: dict) -> None:
+    """Stamp a fresh record with what config.toml says about the site.
+
+    The brand name and what it quotes in are settings, not findings, so they go
+    on before the adapter reads anything. An adapter is free to overwrite them
+    from the page — Sykes' own priceCurrency beats our assumption.
+    """
+    rec["source"] = site.get("name") or site.get("domain")
+    rec["currency"] = site.get("currency")
+    if site.get("tax_included") is not None:
+        rec["tax_included"] = site["tax_included"]
+
+
+def fetch(url: str) -> tuple[int, str]:
+    """GET a URL, returning (status, body). Never raises on HTTP errors."""
+    parts = urllib.parse.urlsplit(url)
+    conn = http.client.HTTPSConnection(parts.netloc, timeout=config.TIMEOUT)
+    path = parts.path + (f"?{parts.query}" if parts.query else "")
+    try:
+        conn.request("GET", path or "/", headers={
+            "User-Agent": config.USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": config.ACCEPT_LANGUAGE,
+        })
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8", errors="replace")
+        return resp.status, body
+    finally:
+        conn.close()
+
+
+def first_redirect(url: str) -> str:
+    """Return the Location of the first redirect, or the URL unchanged.
+
+    Booking.com share links need GET — they answer HEAD with a bare 200 and no
+    Location header. We stop after one hop because the *second* redirect strips
+    every query parameter, which is exactly the data we came for.
+    """
+    parts = urllib.parse.urlsplit(url)
+    conn = http.client.HTTPSConnection(parts.netloc, timeout=config.TIMEOUT)
+    path = parts.path + (f"?{parts.query}" if parts.query else "")
+    try:
+        conn.request("GET", path,
+                     headers={"User-Agent": config.USER_AGENT, "Accept": "*/*"})
+        resp = conn.getresponse()
+        loc = resp.getheader("Location")
+        if resp.status in (301, 302, 303, 307, 308) and loc:
+            return urllib.parse.urljoin(url, loc)
+        return url
+    finally:
+        conn.close()
+
+
+def nights_between(checkin: str | None, checkout: str | None) -> int | None:
+    if not (checkin and checkout):
+        return None
+    try:
+        return (dt.date.fromisoformat(checkout) - dt.date.fromisoformat(checkin)).days
+    except ValueError:
+        return None
+
+
+def _json_ld(html: str) -> list[dict]:
+    """Every schema.org object on the page, flattened."""
+    out = []
+    for blob in re.findall(
+        r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', html, re.S
+    ):
+        try:
+            data = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        for obj in (data if isinstance(data, list) else [data]):
+            if isinstance(obj, dict):
+                out.append(obj)
+    return out
+
+
+def _next_data(html: str) -> dict | None:
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+
+
+# ─────────────────────────────── Booking.com ───────────────────────────────
+
+BOOKING_PATH = re.compile(r"/hotel/([a-z]{2})/([^/.]+)\.")
+
+
+def booking(url: str, site: dict) -> dict:
+    """Booking.com: parse the URL. The page is behind an AWS WAF challenge.
+
+    A /Share-XXXX link 301s to a URL carrying dates, party size and city ID in
+    the query string, which is everything except the price.
+    """
+    rec = blank_record()
+    apply_site(rec, site)
+
+    if "/Share-" in url:
+        url = first_redirect(url)
+
+    parts = urllib.parse.urlsplit(url)
+    q = urllib.parse.parse_qs(parts.query)
+
+    def one(key, cast=str, default=None):
+        vals = q.get(key)
+        if not vals:
+            return default
+        try:
+            return cast(vals[0])
+        except (TypeError, ValueError):
+            return default
+
+    if m := BOOKING_PATH.search(parts.path):
+        rec["country"] = m.group(1)
+        rec["code"] = m.group(2)
+        rec["name"] = m.group(2).replace("-", " ").title()
+
+    rec["url"] = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    rec["checkin"] = one("checkin")
+    rec["checkout"] = one("checkout")
+    rec["nights"] = nights_between(rec["checkin"], rec["checkout"])
+    rec["adults"] = one("group_adults", int) or one("req_adults", int)
+    rec["children"] = one("group_children", int, 0)
+    rec["rooms"] = one("no_rooms", int)
+
+    # Booking.com encodes the selected room block's price on the end of
+    # sr_pri_blocks as minor units: ..._5_0_0__29363 means 293.63. Present on
+    # links copied from a search result, absent on a bare property URL.
+    if m := re.search(r"sr_pri_blocks=[^&]*?__(\d+)", parts.query):
+        amount = int(m.group(1)) / 100
+        if config.BOOKING_MIN_PRICE <= amount <= config.BOOKING_MAX_PRICE:
+            rec["price"] = amount
+            # Checked against two real bookings, this sits 19-23% below the
+            # checkout total — near the pre-tax room rate. Useful as a
+            # ballpark, misleading if presented as the price.
+            rec["price_basis"] = "indicative"
+
+    rec["status"] = OK if rec["price"] else NEEDS_PRICE
+    return rec
+
+
+# ────────────────────────────── Sykes Cottages ─────────────────────────────
+
+SYKES_PATH = re.compile(r"/cottage/([^/]+)/(.+?)-(\d+)\.html")
+
+
+def sykes(url: str, site: dict) -> dict:
+    """Sykes: full scrape. Serves plain HTML with schema.org VacationRental."""
+    rec = blank_record()
+    apply_site(rec, site)
+    rec["url"] = url.split("#")[0]
+
+    if m := SYKES_PATH.search(url):
+        rec["region"] = m.group(1).replace("-", " ")
+        rec["name"] = m.group(2).replace("-", " ")
+        rec["code"] = m.group(3)
+
+    status, html = fetch(url)
+    if status != 200 or not html:
+        rec["status"] = BLOCKED
+        return rec
+
+    for obj in _json_ld(html):
+        if obj.get("@type") not in ("VacationRental", "LodgingBusiness", "Accommodation"):
+            continue
+        rec["name"] = obj.get("name") or rec["name"]
+        rec["code"] = str(obj.get("identifier") or rec["code"] or "")
+        rec["latitude"] = obj.get("latitude")
+        rec["longitude"] = obj.get("longitude")
+        rec["checkin_time"] = obj.get("checkinTime")
+        rec["checkout_time"] = obj.get("checkoutTime")
+
+        addr = obj.get("address") or {}
+        if isinstance(addr, dict):
+            rec["location"] = addr.get("streetAddress") or rec["location"]
+
+        rating = obj.get("aggregateRating") or {}
+        if isinstance(rating, dict):
+            rec["score"] = rating.get("ratingValue")
+            rec["reviews"] = rating.get("reviewCount") or rating.get("ratingCount")
+
+        place = obj.get("containsPlace") or {}
+        if isinstance(place, dict):
+            occ = place.get("occupancy") or {}
+            rec["sleeps"] = occ.get("value") if isinstance(occ, dict) else None
+            rec["bedrooms"] = place.get("numberOfBedrooms")
+            rec["bathrooms"] = place.get("numberOfBathroomsTotal")
+
+            # The price is a schema.org Offer nested under containsPlace.
+            offer = place.get("offers") or {}
+            if isinstance(offer, list):
+                offer = offer[0] if offer else {}
+            if isinstance(offer, dict) and offer.get("price") is not None:
+                try:
+                    rec["price"] = float(offer["price"])
+                except (TypeError, ValueError):
+                    pass
+                rec["currency"] = offer.get("priceCurrency") or rec["currency"]
+                # Sykes publishes a headline rate tagged unitText "from". It is
+                # not the quote for the dates being browsed — a 3-night stay
+                # showing "from £1090" bills at £582 — so say so rather than
+                # letting a marketing number pose as a price.
+                spec = offer.get("priceSpecification") or {}
+                unit = str(spec.get("unitText") or "").strip().lower()
+                rec["price_basis"] = "indicative" if unit == "from" else "quoted"
+        break
+
+    # Sykes states no stay length on the page — its price is a "from" figure for
+    # an unspecified duration. The link may carry one; otherwise leave it unset
+    # rather than assuming the standard week and quietly skewing the per-night
+    # maths.
+    if m := re.search(r"[#&]duration=(\d+)", url):
+        rec["nights"] = int(m.group(1))
+
+    rec["status"] = OK if rec["price"] else NEEDS_PRICE
+    return rec
+
+
+# ───────────────────── cottages.com / Hoseasons (Awaze) ────────────────────
+
+AWAZE_PATH = re.compile(r"/(?:cottages|accom)/(.+?)-([a-z0-9]+)/?$", re.I)
+
+
+def awaze(url: str, site: dict) -> dict:
+    """cottages.com and hoseasons.co.uk — one platform, one parser.
+
+    Both are Awaze brands on the same Next.js stack, so property records live in
+    __NEXT_DATA__ under sections[].content.properties. Detail pages sit behind an
+    AWS WAF that answers with 202 and an empty body, so we fall back to whatever
+    the URL itself tells us. Which brand we're on comes from the matched entry
+    in config.toml, so a third Awaze site needs no code here.
+    """
+    rec = blank_record()
+    apply_site(rec, site)
+    rec["url"] = url.split("?")[0]
+
+    parts = urllib.parse.urlsplit(url)
+    if m := AWAZE_PATH.search(parts.path):
+        rec["name"] = m.group(1).replace("-", " ").title()
+        rec["code"] = m.group(2).upper()
+
+    # Awaze search links carry the whole query in the URL: start=09-10-2026 is
+    # day-month-year, plus nights, adult and regionName. Free and exact, so
+    # read it before touching the network.
+    q = urllib.parse.parse_qs(parts.query)
+
+    def one(key, cast=str, default=None):
+        vals = q.get(key)
+        if not vals or vals[0] == "":
+            return default
+        try:
+            return cast(vals[0])
+        except (TypeError, ValueError):
+            return default
+
+    rec["adults"] = one("adult", int)
+    rec["children"] = one("child", int)
+    rec["nights"] = one("nights", int)
+    rec["region"] = one("regionName")
+    if start := one("start"):
+        try:
+            checkin = dt.datetime.strptime(start, "%d-%m-%Y").date()
+            rec["checkin"] = checkin.isoformat()
+            if rec["nights"]:
+                rec["checkout"] = (checkin + dt.timedelta(days=rec["nights"])).isoformat()
+        except ValueError:
+            pass
+
+    status, html = fetch(url)
+    if status != 200 or not html.strip():
+        # 202 + empty body is the WAF challenge. We still have a usable record.
+        rec["status"] = BLOCKED
+        return rec
+
+    data = _next_data(html)
+    if not data:
+        rec["status"] = NEEDS_PRICE
+        return rec
+
+    page = data.get("props", {}).get("pageProps", {})
+
+    # Detail pages describe the property in `service` but load pricing from a
+    # client-side microfrontend, so no price is available here. Take the solid
+    # identity fields and let the price be supplied another way.
+    service = page.get("service")
+    if isinstance(service, dict):
+        rec["name"] = service.get("propertyName") or rec["name"]
+        rec["code"] = service.get("code") or rec["code"]
+        rec["location"] = service.get("location") or rec["location"]
+        rec["note"] = service.get("propertyType") or rec["note"]
+        if str(service.get("grade") or "").isdigit():
+            rec["score"] = float(service["grade"])
+
+    if isinstance(page.get("lengthOfStay"), (int, str)) and str(page["lengthOfStay"]).isdigit():
+        rec["nights"] = int(page["lengthOfStay"])
+
+    guests = page.get("guests")
+    if isinstance(guests, dict) and str(guests.get("adults", "")).isdigit():
+        rec["adults"] = int(guests["adults"])
+
+    wanted = (rec["code"] or "").upper()
+    best = None
+    for section in data.get("props", {}).get("pageProps", {}).get("sections", []):
+        for prop in (section.get("content") or {}).get("properties") or []:
+            if not isinstance(prop, dict):
+                continue
+            if wanted and str(prop.get("code", "")).upper() == wanted:
+                best = prop
+                break
+            best = best or prop
+        if best and wanted and str(best.get("code", "")).upper() == wanted:
+            break
+
+    if best:
+        rec["name"] = best.get("title") or rec["name"]
+        rec["code"] = best.get("code") or rec["code"]
+        rec["location"] = best.get("location")
+        rec["region"] = best.get("rhs3")
+        rec["price"] = best.get("price") or best.get("priceFrom")
+        rec["price_basis"] = "quoted" if best.get("price") else "indicative"
+        rec["was_price"] = best.get("wasPrice")
+        rec["nights"] = best.get("nights")
+        rec["sleeps"] = best.get("guests")
+        rec["bedrooms"] = best.get("bedrooms")
+        rec["bathrooms"] = best.get("bathrooms")
+        rec["score"] = best.get("score")
+        if best.get("pageURL"):
+            rec["url"] = best["pageURL"]
+
+    rec["status"] = OK if rec["price"] else NEEDS_PRICE
+    return rec
+
+
+# ──────────────────────────────── dispatch ─────────────────────────────────
+
+ADAPTERS = {"booking": booking, "sykes": sykes, "awaze": awaze}
+
+
+def capture(url: str) -> dict:
+    """Route a URL to its adapter and stamp the capture time."""
+    host = urllib.parse.urlsplit(url).netloc.lower()
+    for site in config.SOURCES:
+        # An entry with no domain would otherwise match every URL, since "" is
+        # a substring of anything.
+        domain = str(site.get("domain") or "").lower()
+        if not domain or domain not in host:
+            continue
+        fn = ADAPTERS.get(site.get("parser"))
+        if fn is None:
+            raise ValueError(
+                f"{site.get('domain')} names parser {site.get('parser')!r}, "
+                f"which doesn't exist. In {config.PATH}, pick one of: "
+                + ", ".join(sorted(ADAPTERS))
+            )
+        rec = fn(url, site)
+        rec["captured_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        return rec
+    raise ValueError(
+        f"No adapter for {host or url!r}. Supported: "
+        + ", ".join(str(s.get("domain")) for s in config.SOURCES)
+    )

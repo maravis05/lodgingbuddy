@@ -1,0 +1,115 @@
+# lodgingbuddy settings.
+#
+# Every key here has a built-in default in config.py, so you can delete any line
+# — or this whole file — and the tool still runs. Set LODGINGBUDDY_CONFIG to use
+# a different file.
+
+
+[storage]
+# Where captured stays are kept. A relative path sits next to the script.
+file = "stays.json"
+
+
+[http]
+user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+timeout_seconds = 25
+# en-GB keeps UK sites quoting in pounds rather than guessing from the IP.
+accept_language = "en-GB,en;q=0.9"
+
+
+[tax]
+# UK VAT, added to any price a site flags as pre-tax. Applies to the Scottish
+# stays this tool is aimed at; change it if you point it somewhere else.
+vat_rate = 0.20
+
+
+[currency]
+# Prices are held in `base`. `list --rate` converts them to `quote` for display.
+base = "GBP"
+quote = "USD"
+# Default for `list --rate`; 0 means don't convert unless asked on the day.
+default_rate = 0
+# Assumed for `set --native-price` when no --native-currency is given.
+native_default = "GBP"
+
+
+[split]
+# How many ways the bill divides — which is not how many people are going. A
+# couple and a singleton settling half each are two shares, not three. Override
+# one stay that splits differently with `set <id> --shares N`.
+shares = 2
+# What one share is called, for the table header and `show`.
+label = "share"
+
+
+[display]
+default_sort = "share"
+# Between columns, and the rule under the header.
+column_gap = "  "
+rule_char = "─"
+# Columns truncate rather than wrap, so the table stays one row per stay.
+name_width = 30
+source_width = 11
+where_width = 20
+
+# Leading glyph per record status.
+[display.status_marks]
+ok = " "
+needs_price = "·"
+blocked = "!"
+
+# Trails the all-in price to say how VAT got there.
+[display.tax_marks]
+inclusive = ""
+added = "+"
+unknown = "?"
+
+
+[booking]
+# Booking.com encodes the selected room block's price on the end of
+# sr_pri_blocks in minor units. These bounds reject the other numbers that
+# pattern catches — a £40 fragment, an ID that happens to parse.
+min_price = 10
+max_price = 100000
+
+
+# Sites, tried in the order listed. `domain` is matched against the URL host and
+# `parser` names an adapter in sources.py (booking, sykes, or awaze). Adding
+# another Awaze brand needs nothing but another entry here.
+[[source]]
+name = "booking.com"
+domain = "booking.com"
+parser = "booking"
+currency = "GBP"        # Scottish properties price in GBP
+# Booking.com shows a US booker prices with VAT stripped out, then adds it back
+# at checkout — a $429 room bills as $514.53. Set true if your account displays
+# inclusive prices, or override one stay with `set <id> --incl-tax`.
+tax_included = false
+
+[[source]]
+name = "sykes"
+domain = "sykescottages.co.uk"
+parser = "sykes"
+currency = "GBP"
+tax_included = true     # UK consumer site: prices shown inclusive
+
+[[source]]
+name = "cottages.com"
+domain = "cottages.com"
+parser = "awaze"
+currency = "GBP"
+tax_included = true
+
+[[source]]
+name = "hoseasons"
+domain = "hoseasons.co.uk"
+parser = "awaze"
+currency = "GBP"
+tax_included = true
+
+
+[bookmarklet]
+source = "bookmarklet.js"
+output = "bookmarklet.txt"
+# Past roughly this, some browsers refuse to store the bookmark.
+max_url_bytes = 60000

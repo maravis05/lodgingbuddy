@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Your captured stays — real dates, prices and plans. Track this only if you
+# mean to publish the trip.
+stays.json
