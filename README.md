@@ -11,6 +11,27 @@ Requires Python 3.11+ (for `tomllib`). No dependencies.
 
 ## Use
 
+Run it with no arguments and it holds a prompt open, so a browsing session is
+one process rather than one per link. Paste a link — or the bookmarklet's
+output — and press enter. Add a space and the total you're paying to record it:
+
+```console
+$ ./lodgingbuddy.py
+lodgingbuddy — 4 stays on file. `help` for what this takes.
+link> https://www.booking.com/Share-LjP6kp 480
+  Strathisla Oban [booking.com] · 3 nts · 480 GBP all-in · 80/share/nt
+link> ./lodgingbuddy.py paste '{"source":"sykes",...}' 582
+  Heather Island View [sykes] · 3 nts · 582 GBP all-in · 97/share/nt
+link> list
+```
+
+The total is optional — leave it off and the stay is captured with whatever the
+site gave up. A number typed here is taken as the **final** price: quoted for
+your dates, tax included, and authoritative over anything scraped. Anything
+that isn't a link runs as a command. Ctrl-D quits.
+
+Every command also works as a one-shot:
+
 ```console
 $ ./lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/Argyll-and-Bute-Kilbowie/...
 $ ./lodgingbuddy.py set heather --price 582 --incl-tax
@@ -25,6 +46,7 @@ $ ./lodgingbuddy.py list
 
 | command | |
 |---|---|
+| *(none)* | hold a prompt open for pasted links |
 | `add <url>` | capture a stay from a URL |
 | `set <id> --price N …` | fill in or correct a field |
 | `list [--sort K] [--rate N]` | everything side by side |

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import shlex
 import sys
 
 import config
@@ -397,17 +398,9 @@ def cmd_paste(args) -> int:
         print(f"That isn't valid JSON ({exc}).", file=sys.stderr)
         return 1
 
-    rec = sources.blank_record()
-    candidates = incoming.pop("price_candidates", []) or []
-    for field, value in incoming.items():
-        if field in rec and value is not None:
-            rec[field] = value
-
-    if not (rec["name"] or rec["code"]):
-        # Search and region pages parse fine but describe no single property.
-        print("That page doesn't identify one property — it looks like a search "
-              "or landing page. Open a specific listing and click again.",
-              file=sys.stderr)
+    rec, candidates, problem = record_from_payload(incoming)
+    if problem:
+        print(problem, file=sys.stderr)
         return 1
 
     if args.price is not None:
@@ -415,8 +408,6 @@ def cmd_paste(args) -> int:
         rec["price_basis"] = "quoted"
     rec["nights"] = args.nights or rec["nights"]
     rec["adults"] = args.adults or rec["adults"]
-    rec["captured_at"] = dt.datetime.now().isoformat(timespec="seconds")
-    rec["status"] = sources.OK if rec["price"] else sources.NEEDS_PRICE
 
     stays = load()
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
@@ -444,6 +435,29 @@ def cmd_paste(args) -> int:
     else:
         print("  no price on the page — add one with `set`")
     return 0
+
+
+def record_from_payload(incoming: dict) -> tuple[dict | None, list, str | None]:
+    """Turn a bookmarklet payload into a record, or say why it isn't one.
+
+    Returns (record, price candidates, complaint). Shared by `paste` and the
+    prompt so both judge a page the same way.
+    """
+    rec = sources.blank_record()
+    candidates = incoming.pop("price_candidates", []) or []
+    for field, value in incoming.items():
+        if field in rec and value is not None:
+            rec[field] = value
+
+    if not (rec["name"] or rec["code"]):
+        # Search and region pages parse fine but describe no single property.
+        return None, candidates, ("That page doesn't identify one property — it "
+                                  "looks like a search or landing page. Open a "
+                                  "specific listing and click again.")
+
+    rec["captured_at"] = dt.datetime.now().isoformat(timespec="seconds")
+    rec["status"] = sources.OK if rec["price"] else sources.NEEDS_PRICE
+    return rec, candidates, None
 
 
 def cmd_rm(args) -> int:
@@ -561,9 +575,216 @@ def cmd_show(args) -> int:
     return 0
 
 
+# ────────────────────────────── the prompt ─────────────────────────────────
+
+def as_number(text: str | None) -> float | None:
+    """A typed total, or None if that isn't what this is.
+
+    Tolerates the shapes a price arrives in when you've just copied one off a
+    booking page: 1,234.50 and £480 are both numbers.
+    """
+    text = (text or "").strip().replace(",", "").lstrip("£$€")
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
+def parse_entry(line: str) -> tuple[str, object, float | None] | None:
+    """Read one line of the prompt into (kind, payload, total), or None.
+
+    Three things get pasted here and all of them are welcome: a bare URL, raw
+    JSON, or the whole `./lodgingbuddy.py paste '{...}'` command line the
+    bookmarklet puts on the clipboard. Any of them may be followed by a space
+    and the total you're paying.
+    """
+    line = line.strip()
+    if not line:
+        return None
+
+    # Raw JSON. raw_decode finds where the object ends, so whatever follows is
+    # the total — no counting braces by hand.
+    if line.startswith("{"):
+        try:
+            obj, end = json.JSONDecoder().raw_decode(line)
+        except json.JSONDecodeError:
+            return None
+        return ("json", obj, as_number(line[end:]))
+
+    if line.startswith("http"):
+        url, _, tail = line.partition(" ")
+        return ("url", url, as_number(tail))
+
+    # The bookmarklet's command line. shlex undoes its shell quoting, including
+    # the '\'' dance it does for apostrophes in property names.
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        return None
+    for i, token in enumerate(tokens):
+        tail = " ".join(tokens[i + 1:])
+        if token.startswith("{"):
+            try:
+                return ("json", json.loads(token), as_number(tail))
+            except json.JSONDecodeError:
+                return None
+        if token.startswith("http"):
+            return ("url", token, as_number(tail))
+    return None
+
+
+def apply_total(rec: dict, total: float) -> None:
+    """Record a total typed at the prompt, and let it win.
+
+    You typed it off the booking page, so it is the final number: quoted for
+    these dates and with tax already in it. It also clears any scraped native
+    price, which `all_in` would otherwise prefer — leaving that in place would
+    show you a number you didn't type and can't account for.
+    """
+    rec["price"] = total
+    rec["price_basis"] = "quoted"
+    rec["tax_included"] = True
+    rec["native_price"] = None
+    rec["native_currency"] = None
+    rec["status"] = sources.OK
+
+
+def confirm(rec: dict, candidates: list, rate: float | None) -> str:
+    """One line back, because you're about to paste another one."""
+    amount, cur, tax = all_in(rec)
+    amount, cur = converted(amount, cur, rate)
+    psn = per_share_night(rec, rate)
+
+    bits = [f"{rec.get('name') or '?'} [{rec.get('source')}]"]
+    if rec.get("nights"):
+        bits.append(f"{rec['nights']} nts")
+    if amount:
+        soft = "~" if rec.get("price_basis") == "indicative" else ""
+        bits.append(f"{soft}{amount:,.0f} {cur}".strip()
+                    + config.TAX_MARKS.get(tax, "") + " all-in")
+    if psn:
+        bits.append(f"{psn:,.0f}/{config.SHARE_LABEL}/nt")
+    out = ["  " + " · ".join(bits)]
+
+    if rec.get("status") == sources.BLOCKED:
+        out.append("    the site refused the page — paste the bookmarklet output"
+                   " instead, or add a total after the link")
+    elif not amount and candidates:
+        out.append("    couldn't tell which amount is the total. Candidates: "
+                   + ", ".join(f"{c:g}" for c in candidates))
+    elif not amount:
+        out.append("    no price — paste it again with the total after a space")
+    elif rec.get("price_basis") == "indicative":
+        out.append('    ~ is a "from" price, not a quote — paste again with the'
+                   " total after a space")
+    return "\n".join(out)
+
+
+def capture_entry(kind: str, payload, total: float | None, rate: float | None) -> None:
+    """Fold one pasted entry into the store and say what happened."""
+    candidates: list = []
+    if kind == "url":
+        try:
+            rec = sources.capture(payload)
+        except (ValueError, OSError) as exc:
+            print(f"  {exc}")
+            return
+    else:
+        rec, candidates, problem = record_from_payload(dict(payload))
+        if problem:
+            print(f"  {problem}")
+            return
+
+    stays = load()
+    rec = merge_over(find_exact(stays, key_of(rec)), rec)
+    # After the merge, so a typed total beats anything the merge restored.
+    if total is not None:
+        apply_total(rec, total)
+    elif rec.get("price") or rec.get("native_price"):
+        rec["status"] = sources.OK
+    stays = [s for s in stays if key_of(s) != key_of(rec)]
+    stays.append(rec)
+    save(stays)
+    print(confirm(rec, candidates, rate))
+
+
+PROMPT_HELP = """\
+  Paste a link, or the bookmarklet's output, and press enter.
+  Add a space and the total you're paying to record it:
+
+      https://www.booking.com/Share-abc123 480
+      ./lodgingbuddy.py paste '{...}' 582
+
+  A total typed here is taken as the final price, tax included.
+  Anything else runs as a command — list, show, set, rm, refresh.
+  Ctrl-D quits, Ctrl-C clears the line."""
+
+
+def cmd_watch(args) -> int:
+    """Hold a prompt open so a browsing session isn't one process per link."""
+    try:
+        import readline  # noqa: F401 — arrow keys and history, where available
+    except ImportError:
+        pass
+
+    # Bare `./lodgingbuddy.py` parses no subcommand, so there is no --rate.
+    rate = getattr(args, "rate", None) or config.DEFAULT_RATE
+    stays = load()
+    print(f"lodgingbuddy — {len(stays)} stays on file. `help` for what this takes.")
+    while True:
+        try:
+            line = input("link> ").strip()
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            continue
+
+        if not line:
+            continue
+        if line in ("quit", "exit", "q"):
+            return 0
+        if line in ("help", "h", "?"):
+            print(PROMPT_HELP)
+            continue
+
+        if entry := parse_entry(line):
+            capture_entry(*entry, rate)
+            continue
+
+        # A paste that didn't parse should say so, rather than being reported as
+        # an unknown command — a truncated clipboard is the likely cause.
+        if line.startswith(("{", "http")) or "lodgingbuddy.py" in line:
+            print("  that looks like a paste but didn't parse — copy it again, "
+                  "or check the whole line arrived")
+            continue
+
+        # Not a link, so treat it as a command — but only if it names one. A
+        # mistyped paste shouldn't answer with a screenful of argparse usage.
+        head = line.split()[0]
+        if head not in getattr(args, "commands", ()):
+            print(f"  not a link, and no command called {head!r} — try `help`")
+            continue
+
+        # argparse exits on a bad command line, which must not take the prompt
+        # down with it.
+        try:
+            sub_args = args.parser.parse_args(shlex.split(line))
+        except (SystemExit, ValueError):
+            continue
+        if func := getattr(sub_args, "func", None):
+            try:
+                func(sub_args)
+            except (ValueError, OSError, KeyError) as exc:
+                print(f"  {exc}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Collate lodging options you pick while browsing.")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p.set_defaults(parser=p)
+    # Not required: with no command at all you get the prompt.
+    sub = p.add_subparsers(dest="cmd")
 
     a = sub.add_parser("add", help="capture a stay from a URL")
     a.add_argument("url")
@@ -637,8 +858,16 @@ def main() -> int:
                          f"{config.QUOTE_CURRENCY} at this rate")
     sh.set_defaults(func=cmd_show)
 
+    w = sub.add_parser("watch", help="hold a prompt open for pasted links")
+    w.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
+                   metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
+                   help=f"convert {config.BASE_CURRENCY} prices to "
+                        f"{config.QUOTE_CURRENCY} at this rate")
+    w.set_defaults(func=cmd_watch)
+
+    p.set_defaults(commands=set(sub.choices))
     args = p.parse_args()
-    return args.func(args)
+    return args.func(args) if getattr(args, "func", None) else cmd_watch(args)
 
 
 if __name__ == "__main__":
