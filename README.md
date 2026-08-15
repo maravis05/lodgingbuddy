@@ -7,7 +7,10 @@ Paste a link and it captures what it can — name, place, dates, sleeps, bedroom
 review score, and a price where the site will give one up. Fill the gaps with
 `set`; `list` puts everything side by side on one comparable number.
 
-Requires Python 3.11+ (for `tomllib`). No dependencies.
+## Prerequisites
+
+Python 3.11 or newer on your `PATH` (3.11 is where `tomllib` arrived). Nothing
+to install — it's standard library only. Check with `python3 --version`.
 
 ## Use
 
@@ -100,10 +103,53 @@ Another brand on a platform already supported is a `[[source]]` entry in
 
 ## Bookmarklet
 
-For pages a script can't reach. `python3 build_bookmarklet.py` writes
-`bookmarklet.txt`; save that as a bookmark's URL and click it on a listing. The
-browser has already rendered the page and cleared the bot wall, so it reads
-what `add` can't. It parses the DOM only — no network calls, no storage.
+A bookmarklet is an ordinary browser bookmark whose URL, instead of starting
+with `https:`, starts with `javascript:`. Clicking it doesn't navigate anywhere
+— the browser runs that code against the page you're already looking at. No
+extension, no install, no permissions dialog. It's been in every browser for
+about twenty-five years and is still the shortest path from "this page has data
+I want" to "I have the data".
+
+That sidesteps the whole scraping problem. A script fetching cottages.com gets
+an AWS WAF challenge, because it *is* a robot. Your browser gets the page,
+because it is a browser that has already solved the challenge, already run the
+site's JavaScript, and already has your dates and currency applied. The data is
+sitting rendered in front of you; this just picks it up.
+
+It also crosses machines, which is why it exists here: the browser can be on
+your laptop while the script runs on a headless box over SSH. The clipboard is
+the bridge. (A Chrome extension can't do that — Native Messaging only talks to
+the same machine.)
+
+**Build and install.**
+
+```console
+$ python3 build_bookmarklet.py
+source    11,209 bytes
+stripped   8,011 bytes
+encoded   14,990 bytes  ->  bookmarklet.txt
+```
+
+Create a new bookmark, and paste the contents of `bookmarklet.txt` into its
+**URL** field — not the name. Keep it on the bookmarks bar. Note that most
+browsers strip `javascript:` if you paste it into the address bar directly, so
+it has to go in via the bookmark editor. Rebuild after editing
+`bookmarklet.js`, and re-paste.
+
+**Use.** Open a listing, click the bookmark. It reads the page's schema.org
+JSON-LD, its `__NEXT_DATA__` blob, and failing those the visible text, then
+copies a ready-to-run `./lodgingbuddy.py paste '{...}'` command to your
+clipboard and tells you what it found. Paste that at the prompt, with the total
+after a space if you have it.
+
+It only reads the DOM — no network calls, no cookies, no storage — and the
+extractor is split from the browser plumbing so it can be tested against saved
+HTML under node (`test_bookmarklet.js`).
+
+Where a page shows several plausible amounts and none is clearly the total, it
+reports them as candidates rather than guessing. Booking.com only reveals the
+real total once you click through to book, so that number is worth typing in by
+hand — it's taken as final.
 
 `refresh` never trades good data for bad: a site that answers with a bot wall
 keeps what it already had.
