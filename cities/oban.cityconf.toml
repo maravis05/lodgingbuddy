@@ -10,6 +10,27 @@
 # run. Giving `latitude`/`longitude` instead skips that entirely, which is worth
 # doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
 # beach. Coordinates win where both are present.
+#
+# Two things about this list are worth knowing before you read a walk column
+# measured against it, and both came out of the twenty stays in examples/.
+#
+# First: none of these three is a place the write-ups name, so `walk_claimed`
+# stays empty for every stay in Oban and the routed figure is never checked
+# against the listing's own claim. That is not true of Edinburgh, where the
+# write-ups quote Waverley and the Royal Mile and half the destination list
+# answers to a landmark. Booking measures Oban from Corran Halls and from three
+# places miles out of it; see the landmark table below.
+#
+# Second: the ferry figure runs long, and it is the pin rather than the town.
+# The routed walk to it is a median 2.6 times the straight line, where a walk
+# through a small town runs about 1.2 to 1.4. Read off the six stays north of
+# the centre it is starker: they are 7 to 10 minutes from the town-centre pin
+# and 26 to 27 from the ferry, while the two pins are about 550 m apart and the
+# centre is between them and the stays. No route does that unless it doubles
+# back — which is what a pin on a pier deck rather than at the terminal door
+# makes the pedestrian network do, since it reaches the deck by one long spur
+# that every stay then pays for. Worth ten seconds with a map: move the pin to
+# the terminal entrance and the whole column drops by roughly that spur.
 
 [[destination]]
 label = "Oban town centre"
@@ -32,8 +53,116 @@ weight = 0.15
 
 # ── What the write-ups name ───────────────────────────────────────────────
 #
-# Nothing yet. A landmark table is built by reading the write-ups you've already
-# captured and noticing which places they keep naming — `show <id>` prints the
-# prose in full — and the cottage sites say much less of this than Booking.com
-# does. See edinburgh.cityconf.toml for the shape, and for what the optional coordinates
-# are worth.
+# Read out of the twenty Booking.com write-ups in examples/oban.db.json, the
+# same way Edinburgh's was read out of thirty. Oban's answer is much shorter,
+# and the shortness is the finding rather than a gap in the reading.
+#
+# Nineteen of the twenty name exactly four places — Corran Halls, Dunstaffnage
+# Castle, Kilmartin House Museum and Oban Airport — and nineteen of the twenty
+# name nothing else. Not four out of a longer list each: the same four, in the
+# same closing paragraph, every time. That paragraph is generated from Booking's
+# own points-of-interest table for the town, so what it tells you is which four
+# rows Booking holds for Oban, not what is near any particular flat. The twentieth
+# stay is the one hotel here with a write-up somebody wrote by hand, and it names
+# McCaig's Tower, Dunollie, the Esplanade and the ferry — the things a person
+# would say — and none of the four.
+#
+# Three of the four are drives: 3 to 4 miles to Dunstaffnage, 5 to 6 to the
+# airport, 29 to Kilmartin. `Reading.walk_minutes` drops anything past an hour on
+# foot, so they never become walks; what they are good for is the geometry check,
+# which is what catches a stay whose map pin is in the wrong town. Corran Halls
+# is the only one quoted in minutes, and it is quoted in minutes by fifteen of
+# the twenty.
+#
+# So this table earns its keep differently here than in Edinburgh. There it fed
+# the claimed-walk column. Here it feeds nothing but `check`, because Corran
+# Halls is not on the destination list and nothing else is walkable. If you want
+# the listings' own numbers cross-checking against the router, the way to get it
+# is to make Corran Halls a destination — fifteen stays already state their walk
+# to it.
+#
+# `name` is what gets stored and what a [[destination]] label is matched against.
+# `match` is every way the corpus spells it. Order matters: the first entry that
+# matches a phrase names it, so anything that is a prefix of another goes second.
+#
+# On the coordinates. Corran Halls' were fitted from the corpus by
+# summary.locate() and then checked, claim by claim, against all twenty-one
+# quoted walks: every one lands between 0.96 and 1.57 times the straight line,
+# which is what a pavement-to-crow ratio should look like. That is worth spelling
+# out because the coordinate this file nearly got instead was one written from
+# memory, 273 m up the Esplanade, and against that one the same twenty-one claims
+# run from 0.51 to 5.03 — five of them shorter than the crow flies, i.e.
+# impossible. A landmark 300 m out doesn't look wrong in a config file; it looks
+# wrong as a column full of listings calling each other liars.
+#
+# The other three are far enough out that a few hundred metres is nothing, and
+# they were written from knowledge rather than looked up. They are given rather
+# than fitted on purpose: fitting them from this corpus produces confident
+# nonsense, because every stay is inside one square kilometre and circles drawn
+# from one square kilometre don't cross five miles away. Fitted, Dunstaffnage
+# came out 7.7 km from the castle and just as sure of itself as Corran Halls was.
+#
+# The last three have no coordinates and are not expected to get any: they are
+# here so that a write-up naming them is read rather than skipped, and so the
+# ferry and the distillery on the destination list have something to answer to
+# when a write-up finally quotes one.
+
+[[landmark]]
+name = "Corran Halls"
+# "Corran Hall" singular turns up too, and Booking drops the "the" as often as
+# it keeps it.
+match = "(?:the\\s+)?Corran\\s+Halls?"
+latitude = 56.4189
+longitude = -5.4752
+
+[[landmark]]
+name = "Dunstaffnage Castle"
+match = "Dunstaffnage\\s+Castle"
+latitude = 56.4542
+longitude = -5.4384
+
+[[landmark]]
+name = "Kilmartin House Museum"
+# The museum renamed itself Kilmartin Museum and the corpus has not caught up,
+# so the "House" is optional both ways round.
+match = "Kilmartin(?:\\s+House)?\\s+Museum|Kilmartin\\s+House"
+latitude = 56.1355
+longitude = -5.4880
+
+[[landmark]]
+name = "Oban Airport"
+# It is at North Connel and both names get used for it.
+match = "(?:Oban|North\\s+Connel)\\s+Airport"
+latitude = 56.4636
+longitude = -5.3997
+
+[[landmark]]
+name = "McCaig's Tower"
+match = "McCaig[’']?s\\s+Tower|McCaig[’']?s\\s+Folly"
+latitude = 56.4160
+longitude = -5.4700
+
+[[landmark]]
+name = "Dunollie Castle"
+# One site, three things on it — castle, house, museum — and the write-ups pick
+# whichever. All the same walk.
+match = "Dunollie(?:\\s+(?:Castle|House|Museum))?"
+latitude = 56.4265
+longitude = -5.4832
+
+# Named to contain the [[destination]] label above, so that summary.claimed_for
+# matches the two: "ferry terminal" is inside "Oban ferry terminal".
+[[landmark]]
+name = "Oban ferry terminal"
+match = "(?:Oban\\s+)?[Ff]erry\\s+(?:terminal|port)|(?:the\\s+)?Railway\\s+Pier"
+
+[[landmark]]
+name = "Oban railway station"
+match = "(?:Oban\\s+)?rail(?:way)?\\s+station|Oban\\s+[Ss]tation"
+
+# Likewise: the distillery is a destination and this is how a write-up would
+# spell it. Nothing in the twenty captures mentions it, which for the one
+# distillery in a distillery town is its own small surprise.
+[[landmark]]
+name = "Oban Distillery"
+match = "Oban\\s+Distillery"
