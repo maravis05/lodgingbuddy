@@ -4,14 +4,22 @@
 # — or this whole file — and the tool still runs. Set LODGINGBUDDY_CONFIG to use
 # a different file.
 #
-# This file is what every database shares. A database may also keep its own —
-# edinbruh.toml beside edinbruh.json — which is merged over this one whenever
-# that database is in use, and is where anything true of a city rather than of
-# the tool belongs: the landmarks its write-ups name, the places worth walking
-# to, what tax is charged and in what currency. Tables merge key by key; a list
-# in a city file replaces the list here outright. [storage] is the exception and
-# is only ever read from this file, since it is what says where the city files
-# themselves live.
+# This file is what everything shares. Two narrower layers go over it:
+#
+#   cities/edinburgh.toml   the place. What its write-ups call the castle, which
+#                           places are worth walking to, what tax is charged and
+#                           in what currency. True of every trip you ever take
+#                           there, so it is kept under the city's name and
+#                           committed — a database that names the city gets it.
+#
+#   <db>.toml               the trip. Which city this database is in, and
+#                           anything true of this one and not of the place:
+#                           how many ways the bill splits, a must-have that
+#                           only matters this time.
+#
+# Tables merge key by key; a list in a narrower file replaces the list here
+# outright. [storage] is the exception and is only ever read from this file,
+# since it is what says where the other two live.
 
 
 [storage]
@@ -22,6 +30,11 @@ file = "stays.json"
 # without a flag on every line. The choice sticks until you change it, so the
 # prompt is named after the database you're in. LODGINGBUDDY_DB wins for a
 # single run without moving the pointer.
+
+# Where city configs are kept — a relative path sits next to the script, not
+# next to the stays. Deliberately: what's in them is knowledge about a place,
+# committed and shared, where the stays are yours.
+cities = "cities"
 
 
 [http]
@@ -312,12 +325,12 @@ require = []
 # ── Where you want to be, and what the write-ups there name ───────────────
 #
 # `[[destination]]` and `[[landmark]]` are both facts about a city, so both live
-# in that city's own file — stays.toml and edinbruh.toml beside this one. A trip
-# with two legs still in play is two files, and neither leg's numbers move while
-# you work on the other.
+# in that city's file — cities/edinburgh.toml, cities/oban.toml. A trip with two
+# legs still in play is two databases naming two cities, and neither leg's
+# numbers move while you work on the other.
 #
 # They can be put here instead, which is what a one-city setup would do: a
-# `[[destination]]` may carry `db = "edinbruh"` to name the database it belongs
+# `[[destination]]` may carry `db = "<name>"` to name the database it belongs
 # to, and one that names none counts everywhere. A city file setting either list
 # replaces whatever this file said.
 #

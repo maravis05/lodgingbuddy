@@ -8,6 +8,12 @@ __pycache__/
 # Which database `db` last left you in.
 .lodgingbuddy-db
 
+# Each database's own settings — which city it's in, and anything true of that
+# trip alone. Yours, like the stays they sit beside. cities/*.toml is the half
+# worth committing, and isn't matched by this.
+/*.toml
+!/config.toml
+
 # Built from bookmarklet.js by build_bookmarklet.py. Generate these, don't clone them.
 bookmarklet.html
 bookmarklet.txt

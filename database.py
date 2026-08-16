@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -42,26 +41,18 @@ SUFFIX = ".json"
 # would sooner or later eat one of them.
 POINTER = config.STORE_DIR / ".lodgingbuddy-db"
 
-# A name has to be able to be a filename. Path tricks and hidden files are
-# refused rather than sanitised: a database quietly renamed under you is worse
-# than one that won't open.
-NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-
-
 def name_of(text: str) -> str:
     """A database name from whatever was typed.
 
     The filename counts, since that's what's in the folder and what you'll have
-    just been looking at — `examples.json` and `examples` are the same ask.
+    just been looking at — `examples.json` and `examples` are the same ask. The
+    rule about what a name may contain is config.NAME, shared with the cities so
+    that both halves of a trip can always be a file.
     """
     name = (text or "").strip()
     if name.endswith(SUFFIX):
         name = name[: -len(SUFFIX)]
-    if not NAME.fullmatch(name):
-        raise ValueError(f"{text!r} can't be a database name — letters, digits, "
-                         f"dot, dash and underscore, starting with a letter or "
-                         f"digit.")
-    return name
+    return config.name_of(name, "database name")
 
 
 def path_of(name: str) -> Path:
@@ -96,9 +87,10 @@ def current() -> str:
     """The database everything reads and writes right now.
 
     Which also settles which settings are in force, so this is where that gets
-    said. A database may carry its own — edinbruh.toml beside edinbruh.json —
-    and the alternative to loading them here is every caller remembering to,
-    which is the same as some of them not.
+    said. A database names the city it is in — stays.toml beside stays.json —
+    and the city is most of what the settings are; the alternative to loading
+    them here is every caller remembering to, which is the same as some of them
+    not.
     """
     name = _resolved()
     config.apply(name)

@@ -1139,11 +1139,13 @@ def cmd_walk(args) -> int:
     wanted = config.destinations_for(db)
     if not wanted:
         elsewhere = " (the ones there name other databases)" if config.DESTINATIONS else ""
+        fix = (f"Add a [[destination]] with a label and an address to "
+               f"{config.CITIES_DIR.name}/{config.CITY}.toml, and every database "
+               f"in {config.CITY} gets it." if config.CITY else
+               f"{db} isn't in a city yet — `db {db} --city <name>` names one, "
+               f"and its destinations come with it.")
         print(f"No destinations for {db} in {config.where()}{elsewhere}, so "
-              f"there's nothing to measure against.\nAdd a [[destination]] with "
-              f"a label and an address to {config.city_path(db).name}, this "
-              f"database's own settings — or to {config.PATH.name} with "
-              f"`db = \"{db}\"` on it.", file=sys.stderr)
+              f"there's nothing to measure against.\n{fix}", file=sys.stderr)
         return 1
 
     stays = load()
@@ -1299,6 +1301,54 @@ def tally(name: str) -> str:
     return "1 stay" if n == 1 else f"{n} stays"
 
 
+def ask_city(db: str) -> str | None:
+    """Which city a new database is in, asked once, while it's being started.
+
+    Asked rather than left to be discovered, because a database with no city is
+    a database whose write-ups go unread and whose walks go unmeasured, and
+    nothing about the empty table it prints says so. One question at the one
+    moment there is nothing else to be doing.
+
+    Silence is an answer: a database can perfectly well have no city, and a
+    pipe that can't be asked mustn't be waited on — the caller says what to do
+    about a database that ends up without one, and says it the same way whether
+    the question was declined or never put.
+    """
+    if not sys.stdin.isatty():
+        return None
+    if known := config.cities():
+        print(f"  Cities already configured: {', '.join(known)}.")
+    print(f"  Which city is {db} in? A new name starts a config for it; blank "
+          f"for none.")
+    try:
+        return input("  city> ").strip() or None
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+
+def attach_city(db: str, city: str) -> None:
+    """Point a database at a city, starting that city's config if it's new."""
+    try:
+        city = config.name_of(city, "city")
+    except ValueError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return
+    fresh = not config.city_path(city).exists()
+    path = config.start_city(city)
+    config.set_city(db, city)
+    where = f"{config.CITIES_DIR.name}/{path.name}"
+    if fresh:
+        print(f"  {db} is in {city}. Started {where} — empty, with the shape "
+              f"commented in. Fill in its destinations and landmarks and every "
+              f"database in {city} gets them.")
+    else:
+        dests, marks = config.city_counts(city)
+        print(f"  {db} is in {city}, so it takes {where}: {dests} "
+              f"destination{'' if dests == 1 else 's'}, {marks} "
+              f"landmark{'' if marks == 1 else 's'}.")
+
+
 def cmd_db(args) -> int:
     """Which set of stays we're working in, and how to be in a different one.
 
@@ -1325,15 +1375,35 @@ def cmd_db(args) -> int:
         back = f" `db {was}` goes back to {tally(was)}." if was != name else ""
         print(f"{'Started and now in' if args.new else 'Now in'} {name} — "
               f"{tally(name)}.{back}")
-        # Which settings that put you under. A database's own file is the thing
-        # that makes two trips at once work, and also the thing you'd never
-        # guess had loaded, so switching says either way.
-        settings = config.city_path(name)
-        if settings.exists():
-            print(f"  Settings: {settings.name} over {config.PATH.name}.")
+
+        # The city, which is most of what the settings are and the one thing
+        # nothing else can work out for itself.
+        city = args.city or (ask_city(name) if args.new else None)
+        if city:
+            attach_city(name, city)
+            # The pointer moved and so did the file under it; re-resolve so the
+            # rest of this run, and the prompt this may have been typed at,
+            # reads the city we just attached rather than the one it had.
+            config.DB = None
+            database.current()
+        elif in_city := config.city_of(name):
+            city_file = config.city_path(in_city)
+            if not city_file.exists():
+                print(f"  In {in_city}, but there is no "
+                      f"{config.CITIES_DIR.name}/{city_file.name} — nothing "
+                      f"came with it. `db {name} --city {in_city}` starts one.")
+            else:
+                dests, marks = config.city_counts(in_city)
+                print(f"  In {in_city} — {dests} destination"
+                      f"{'' if dests == 1 else 's'}, {marks} "
+                      f"landmark{'' if marks == 1 else 's'} from "
+                      f"{config.CITIES_DIR.name}/{city_file.name}.")
         else:
-            print(f"  Settings: {config.PATH.name}. {settings.name} beside it "
-                  f"would hold this trip's landmarks, destinations and rates.")
+            known = config.cities()
+            print(f"  No city — {config.PATH.name} alone. `db {name} --city "
+                  f"<city>` names one, which is what brings the landmarks and "
+                  f"the destinations with it."
+                  + (f" There is: {', '.join(known)}." if known else ""))
         # The pointer moved, but this run didn't. Saying so beats letting the
         # next command look like it ignored you. On stdout, and after the line
         # it qualifies — a caveat that turns up first reads as a failure.
@@ -1342,8 +1412,9 @@ def cmd_db(args) -> int:
                   f"still gets read until you unset it.")
         return 0
 
-    if args.new:
-        print("`db <name> --new` needs a name.", file=sys.stderr)
+    if args.new or args.city:
+        flag = "--new" if args.new else "--city"
+        print(f"`db <name> {flag} ...` needs a name.", file=sys.stderr)
         return 1
 
     here = database.current()
@@ -1353,15 +1424,18 @@ def cmd_db(args) -> int:
     count_width = max(len(c) for c in counts.values())
     for name in names:
         pinned = database.ENV if name == here and database.forced() else ""
-        settings = config.city_path(name)
         line = (f"{'→' if name == here else ' '} {name.ljust(width)}  "
                 f"{counts[name].ljust(count_width)}"
-                + (f"  {settings.name}" if settings.exists() else "")
+                + f"  {config.city_of(name) or ''}"
                 + (f"   ({pinned}, for this run only)" if pinned else ""))
         print(line.rstrip())
+    spare = [c for c in config.cities()
+             if c not in {config.city_of(n) for n in names}]
     print(f"\nIn {config.STORE_DIR}. `db <name>` switches and remembers it; "
-          f"`db <name> --new` starts one. A database may keep its own settings "
-          f"in <name>.toml beside it, merged over {config.PATH.name}.")
+          f"`db <name> --new` starts one and asks which city it's in. The city "
+          f"is what carries the landmarks, the destinations and the rates, from "
+          f"{config.CITIES_DIR}"
+          + (f" — also configured there: {', '.join(spare)}." if spare else "."))
     return 0
 
 
@@ -2038,6 +2112,10 @@ def main() -> int:
     d.add_argument("--new", action="store_true",
                    help="start it — required, so a typo can't silently open an "
                         "empty database instead of the one you meant")
+    d.add_argument("--city", metavar="NAME",
+                   help="which city it's in, which is where its landmarks, "
+                        "destinations and rates come from; starts a config for "
+                        "that city if there isn't one")
     d.set_defaults(func=cmd_db)
 
     rm = sub.add_parser("rm", help="remove one or more stays")

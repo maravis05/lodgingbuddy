@@ -1,23 +1,28 @@
 """
-Settings, in two layers: config.toml, then the database's own file over it.
+Settings, in three layers: the tool, the city, then this particular trip.
 
 The dict below is the full set of defaults, so the tool runs with no config file
 at all and a file that sets three keys overrides exactly three keys. Set
 LODGINGBUDDY_CONFIG to read from somewhere other than config.toml next to this
 file.
 
-The second layer is a city. Most of what this tool is told is not a preference
-but a fact about where you are going: what the write-ups there call the castle,
-which places are worth walking to, what tax is charged and in what currency. One
-global file can hold one city's worth of that, and a second trip either
-overwrites it or is measured against the wrong town. So a database may carry its
-own settings — edinbruh.toml beside edinbruh.json — which are merged over the
-global ones whenever that database is the one in use.
+The middle layer is the one worth having. Most of what this tool gets told is
+not a preference but a fact about a place: what the write-ups there call the
+castle, which places are worth walking to, what tax is charged and in what
+currency. None of that is about the trip — it is as true of the fortnight you
+spent pricing Edinburgh last year as of the weekend you price tomorrow — so it
+lives in cities/edinburgh.toml, under the city's name, and is worth keeping and
+worth sharing. Point a second database at the same city and it arrives knowing
+the place.
+
+The trip is the thin layer on top: <db>.toml beside <db>.json, which says which
+city this database is in and holds anything true of this trip alone — how many
+ways the bill splits, a must-have that only matters this time.
 
 Which means every name below can change while the process is running, and
 nothing may take a copy at import: read `config.X` at the point of use, the way
-every module here already does, and `db edinbruh` moves the landmarks, the
-destinations and the VAT rate together.
+every module here already does, and `db` moves the landmarks, the destinations
+and the VAT rate together.
 
 Constants that aren't settings — the record schema, the status values, the URL
 patterns each site uses — stay in sources.py, where changing one means changing
@@ -27,6 +32,7 @@ the code that reads it.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -34,8 +40,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PATH = Path(os.environ.get("LODGINGBUDDY_CONFIG") or HERE / "config.toml")
 
+# A name that has to be able to be a filename, for both databases and cities.
+# Path tricks and hidden files are refused rather than sanitised: a file quietly
+# renamed under you is worse than one that won't open.
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
 DEFAULTS = {
-    "storage": {"file": "stays.json"},
+    # `cities` sits beside the code rather than beside the stays: a city config
+    # is knowledge about a place, shared and committed, where the stays are
+    # yours and are not.
+    "storage": {"file": "stays.json", "cities": "cities"},
     "http": {
         "user_agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -230,13 +244,13 @@ def _read(path: Path) -> dict:
         sys.exit(f"Can't read {path}: {exc}")
 
 
-# What every database shares, and the floor a city's own file sits on.
+# What every database and every city shares, and the floor the other two sit on.
 BASE = _merge(DEFAULTS, _read(PATH))
 
 # storage
 # Taken from BASE alone and never overlaid. This is the setting that says where
-# the databases live, and a city config is one of the files in that folder —
-# letting it move the folder it was found in is a question with no answer.
+# the other settings files are — letting one of them move the folder it was
+# found in is a question with no answer.
 STORE = Path(BASE["storage"]["file"])
 if not STORE.is_absolute():
     STORE = HERE / STORE
@@ -246,19 +260,63 @@ if not STORE.is_absolute():
 STORE_DIR = STORE.parent
 DEFAULT_DB = STORE.stem
 
+# Cities are named files in a folder of their own, beside the code rather than
+# beside the stays. What is in them is knowledge about a place — worth keeping,
+# worth committing, worth someone else's having — where the stays are a private
+# list of what you might pay for.
+CITIES_DIR = Path(BASE["storage"]["cities"])
+if not CITIES_DIR.is_absolute():
+    CITIES_DIR = HERE / CITIES_DIR
 
-def city_path(db: str) -> Path:
-    """The settings belonging to one database: edinbruh.toml, beside edinbruh.json.
 
-    Same scheme as the databases themselves, because it is the same idea. What
-    the write-ups in a city call the castle, which places are worth walking to,
-    what tax is charged there — none of that is a preference about the tool, and
-    all of it is wrong the moment you point it at the next town. Keeping it in a
-    file named after the database makes a trip two files with one name, and
-    makes going back to a city you priced last year a matter of having kept
-    them.
+def name_of(text: str, what: str = "name") -> str:
+    """A file-safe name, or a complaint about why that isn't one."""
+    name = (text or "").strip()
+    if name.endswith(".toml"):
+        name = name[: -len(".toml")]
+    if not NAME.fullmatch(name):
+        raise ValueError(f"{text!r} can't be a {what} — letters, digits, dot, "
+                         f"dash and underscore, starting with a letter or digit.")
+    return name
+
+
+def city_path(city: str) -> Path:
+    """Where one city's settings live: cities/edinburgh.toml."""
+    return CITIES_DIR / (name_of(city, "city") + ".toml")
+
+
+def db_path(db: str) -> Path:
+    """One database's own settings: stays.toml, beside stays.json.
+
+    Thin on purpose. Its job is to name the city — that is the association, and
+    a file beside the database is the one place that can't be separated from it
+    — and to hold whatever is true of this trip and not of the place.
     """
-    return STORE_DIR / (db + ".toml")
+    return STORE_DIR / (name_of(db, "database") + ".toml")
+
+
+def cities() -> list[str]:
+    """Every city there is a config for."""
+    try:
+        return sorted(p.stem for p in CITIES_DIR.glob("*.toml"))
+    except OSError:
+        return []
+
+
+def city_of(db: str) -> str | None:
+    """Which city a database says it is in, if it says.
+
+    Read straight off the file rather than out of CONFIG, because `db` asks it
+    about every database at once and only one of them is the one in force.
+    """
+    named = _read(db_path(db)).get("city")
+    return str(named) if named else None
+
+
+def city_counts(city: str) -> tuple[int, int]:
+    """What a city config knows: how many destinations, how many landmarks."""
+    conf = _read(city_path(city))
+    return len(conf.get("destination") or []), len(conf.get("landmark") or [])
 
 
 # What's in force right now.
@@ -266,8 +324,11 @@ CONFIG = BASE
 # Which database these settings are for, so `apply` can tell a switch from a
 # repeat — `current()` asks on every read.
 DB: str | None = None
-# The city file in force, or None where the database hasn't got one.
-CITY: Path | None = None
+# The city in force, and the two files it came with. Either may be None: a
+# database needn't name a city, and a city needn't have a file yet.
+CITY: str | None = None
+CITY_FILE: Path | None = None
+TRIP_FILE: Path | None = None
 # Settings problems worth saying out loud. Collected rather than printed:
 # this module is imported before anything exists to print with, and a bad
 # weight shouldn't stand between you and the stays you already have.
@@ -279,7 +340,7 @@ def _bind() -> None:
     """Point every name below at whatever CONFIG now says.
 
     Names rather than lookups because that is what every caller already reads,
-    and rebinding them is what makes `db edinbruh` change the weights, the tax
+    and rebinding them is what makes `db <name>` change the weights, the tax
     rate and the landmarks rather than only the file the stays land in.
     """
     globals().update(
@@ -350,32 +411,59 @@ def _bind() -> None:
 
 
 def apply(db: str) -> None:
-    """Work from `db`'s settings from here on.
+    """Work from `db`'s settings from here on: the tool's, its city's, its own.
 
     Called by database.current(), so the thing that asks which database it is in
     is also what loads that database's settings — there is no third place to
     forget. Cheap on the repeat, which matters because that question gets asked
     once per record.
+
+    The trip file is read first because it is what names the city, and applied
+    last because it is the narrowest thing said: the city knows where the castle
+    is, this trip knows there are three of you.
     """
-    global CONFIG, DB, CITY, PROBLEMS
+    global CONFIG, DB, CITY, CITY_FILE, TRIP_FILE, PROBLEMS
     if db == DB:
         return
 
-    path = city_path(db)
-    # A database called "config" would otherwise find the global file as its own
-    # city file and merge it onto itself.
-    itself = path.resolve() == PATH.resolve()
-    overlay = {} if itself else _read(path)
+    trip_file = db_path(db)
+    # A database called "config" would otherwise take the global file as its own
+    # and merge it onto itself.
+    itself = trip_file.resolve() == PATH.resolve()
+    trip = {} if itself else _read(trip_file)
     problems = []
-    if itself and path.exists():
+    if itself and trip_file.exists():
         problems.append(f"a database called {db} would take {PATH.name} as its "
                         f"own settings — ignored, so it holds the global ones")
-    if overlay.pop("storage", None):
-        problems.append(f"[storage] in {path.name} was ignored — a database's "
-                        f"own settings can't move the folder it lives in")
 
-    CONFIG = _merge(BASE, overlay) if overlay else BASE
-    DB, CITY = db, (path if overlay else None)
+    city = trip.pop("city", None)
+    city_file = None
+    city_conf = {}
+    if city:
+        try:
+            city_file = city_path(str(city))
+        except ValueError as exc:
+            problems.append(f"{trip_file.name}: {exc}")
+            city = None
+        else:
+            city_conf = _read(city_file)
+            if not city_file.exists():
+                problems.append(f"{trip_file.name} names city {city!r}, and "
+                                f"there is no {city_file.name} in {CITIES_DIR} "
+                                f"— nothing was loaded for it")
+
+    for path, conf in ((city_file, city_conf), (trip_file, trip)):
+        if path is not None and conf.pop("storage", None):
+            problems.append(f"[storage] in {path.name} was ignored — only "
+                            f"{PATH.name} says where the files live")
+
+    CONFIG = BASE
+    for conf in (city_conf, trip):
+        if conf:
+            CONFIG = _merge(CONFIG, conf)
+    DB, CITY = db, (str(city) if city else None)
+    CITY_FILE = city_file if city_conf else None
+    TRIP_FILE = trip_file if trip_file.exists() and not itself else None
     _bind()
 
     # The landmarks are regexes over the write-ups, so they are compiled here,
@@ -392,7 +480,113 @@ _bind()
 
 def where() -> str:
     """The settings files in force, for a message that has to name them."""
-    return PATH.name + (f" + {CITY.name}" if CITY else "")
+    parts = [PATH.name]
+    if CITY_FILE:
+        parts.append(f"{CITIES_DIR.name}/{CITY_FILE.name}")
+    if TRIP_FILE:
+        parts.append(TRIP_FILE.name)
+    return " + ".join(parts)
+
+
+# What a new city file says before anyone has filled it in. Every line of it is
+# commented, so it is a valid config that changes nothing until you mean it to —
+# and it is the shape of the thing rather than a blank page, because the useful
+# half of a city config is knowing what can go in one.
+CITY_TEMPLATE = '''\
+# {title} — settings for anywhere you stay in {title}.
+#
+# Merged over config.toml whenever a database names this city, and under that
+# database's own file. Anything config.toml holds can go here; what belongs here
+# is what is true of the place rather than of the tool or of one trip.
+
+
+# ── Where you want to be ──────────────────────────────────────────────────
+#
+# `walk` measures minutes on foot from each stay to each of these, and the walk
+# tier scores the weighted mean. `weight` is that destination's share of it;
+# they need not sum to anything. An address is geocoded on first use;
+# latitude/longitude skip that, which is worth doing anywhere the geocoder is
+# vague about — a terminal, a trailhead, a pedestrianised street it resolves to
+# one end of.
+#
+# [[destination]]
+# label = "Old town"
+# address = "..."
+# weight = 0.6
+
+
+# ── What the write-ups name ───────────────────────────────────────────────
+#
+# summary.py reads a distance out of a sentence only for places listed here, so
+# this table is the difference between "the station is an 8-minute walk" landing
+# in the walk column and being a sentence nobody read. Build it by capturing a
+# dozen listings and reading what they keep naming — `show <id>` prints the
+# prose in full.
+#
+# `name` is what gets stored, and what a destination label is matched against.
+# `match` is a regex for every way the write-ups spell it; leave it off and the
+# name itself is used, article-tolerant and whitespace-flexible.
+#
+# latitude/longitude are optional and are what a claim gets checked against, so
+# that "a 1-minute walk" to somewhere a kilometre away is thrown out. Give them
+# only for places that are a point: a long street pinned at its midpoint makes
+# an honest claim from one end read as a lie, and summary.locate() does better
+# by fitting those from the corpus once four stays have quoted a distance.
+#
+# [[landmark]]
+# name = "Cathedral"
+# match = "(?:the\\\\s+)?Cathedral(?:\\\\s+of\\\\s+\\\\w+)?"
+# latitude = 0.0
+# longitude = 0.0
+
+
+# ── What it costs to be there ─────────────────────────────────────────────
+#
+# [currency]
+# base = "EUR"
+#
+# [tax]
+# vat_rate = 0.10
+'''
+
+
+def start_city(city: str) -> Path:
+    """Begin a city config, so there is something to open and fill in."""
+    path = city_path(city)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(CITY_TEMPLATE.format(title=path.stem.replace("-", " ").title()))
+    return path
+
+
+def set_city(db: str, city: str) -> Path:
+    """Say which city a database is in, in the database's own file.
+
+    Edited as text rather than rewritten from parsed TOML, because that file is
+    yours: it may hold this trip's overrides and the comments explaining them,
+    and a tool that reformatted it every time you switched cities would sooner
+    or later eat one.
+    """
+    path = db_path(db)
+    city = name_of(city, "city")
+    line = f'city = "{city}"'
+    if not path.exists():
+        path.write_text(
+            f"# {db} — this database's own settings, over cities/{city}.toml and\n"
+            f"# {PATH.name}. What belongs here is what's true of this trip rather\n"
+            f"# than of the city: how many ways the bill splits, a must-have that\n"
+            f"# only matters this time.\n\n{line}\n")
+        return path
+
+    text = path.read_text()
+    # A bare key has to come before the first table header or it belongs to that
+    # table, so a file that hasn't got one takes it at the top.
+    if re.search(r"^\s*city\s*=.*$", text, re.M):
+        text = re.sub(r"^\s*city\s*=.*$", line, text, count=1, flags=re.M)
+    else:
+        text = line + "\n" + text
+    path.write_text(text)
+    return path
 
 
 def destinations_for(db: str) -> list[dict]:

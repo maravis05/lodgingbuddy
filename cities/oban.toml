@@ -1,5 +1,7 @@
-# Oban — the settings for the `stays` database, merged over config.toml whenever
-# that database is the one in use.
+# Oban — settings for anywhere you stay in Oban.
+#
+# Merged over config.toml whenever a database names this city, and under that
+# database's own file.
 
 
 # ── Where you want to be ──────────────────────────────────────────────────
@@ -33,5 +35,5 @@ weight = 0.15
 # Nothing yet. A landmark table is built by reading the write-ups you've already
 # captured and noticing which places they keep naming — `show <id>` prints the
 # prose in full — and the cottage sites say much less of this than Booking.com
-# does. See edinbruh.toml for the shape, and for what the optional coordinates
+# does. See edinburgh.toml for the shape, and for what the optional coordinates
 # are worth.

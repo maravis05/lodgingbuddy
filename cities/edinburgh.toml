@@ -1,6 +1,8 @@
-# Edinburgh — the settings for the `edinbruh` database, merged over config.toml
-# whenever that database is the one in use. Anything config.toml holds can be
-# set here; what's here is what's true of the city rather than of the tool.
+# Edinburgh — settings for anywhere you stay in Edinburgh.
+#
+# Merged over config.toml whenever a database names this city, and under that
+# database's own file. Anything config.toml holds can be set here; what's here
+# is what's true of the city rather than of the tool or of one trip.
 
 
 # ── Where you want to be ──────────────────────────────────────────────────

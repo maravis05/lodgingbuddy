@@ -31,7 +31,7 @@ running the script by bare path opens it in whatever owns `.py`.
 | `walk [id]` | Measure walking time to your destinations. `--again` re-measures |
 | `glean [id]` | Re-read stored write-ups and file what they say |
 | `rm <id>...` | Delete stays |
-| `db [name]` | Show or switch the active database. `--new` creates one |
+| `db [name]` | Show or switch the active database. `--new` creates one and asks which city it's in; `--city <name>` sets that without asking |
 | `watch` | The prompt; also what runs when no command is given |
 
 `<id>` matches, in order: the record key (`source:code`), a substring of the
@@ -220,8 +220,8 @@ Stays are a JSON list, one file per database, in the folder holding
 `storage.file`. `stays.json` is the database named `stays`; any other `*.json`
 beside it is another. `db <name>` switches and remembers the choice in
 `.lodgingbuddy-db`; `LODGINGBUDDY_DB` overrides it for one run without moving
-the pointer. A database may also keep `<name>.toml` beside its `<name>.json` —
-see City configs below.
+the pointer. A database also keeps `<name>.toml` beside its `<name>.json`,
+naming the city it is in — see Cities and trips below.
 
 The record schema is `sources.blank_record()` — identity, location, dates and
 party, price and tax, property shape and beds, amenities and traits, ratings
@@ -235,15 +235,17 @@ the script.
 
 ## Configuration
 
-Three layers, each merged over the one before: `config.DEFAULTS` in `config.py`,
-then `config.toml`, then the active database's own `<name>.toml`. The tool runs
-with no config file at all, and a file setting three keys overrides three keys.
+Four layers, each merged over the one before: `config.DEFAULTS` in `config.py`,
+then `config.toml`, then the city the active database is in
+(`cities/<city>.toml`), then the database's own `<db>.toml`. The tool runs with
+no config file at all, and a file setting three keys overrides three keys.
 Tables merge key by key; lists (sources, destinations, landmarks) replace
-wholesale.
+wholesale. `[storage]` is read only from `config.toml`, since it says where the
+other files live.
 
 | Section | Holds |
 | --- | --- |
-| `[storage]` | Which file, which also names the default database and its folder |
+| `[storage]` | `file` (names the default database and its folder) and `cities` (where city configs live) |
 | `[http]` | User agent, timeout, accept-language for listing fetches |
 | `[tax]` | `vat_rate`, used when a source quotes ex-tax and the page states nothing |
 | `[split]` | Default number of shares and what to call one |
@@ -267,36 +269,46 @@ exist, a bonus naming a slug nothing produces, a landmark whose `match` won't
 compile, `[storage]` in a city file — are reported on stderr and otherwise
 ignored.
 
-## City configs
+## Cities and trips
 
-`edinbruh.toml` beside `edinbruh.json` is the settings for the `edinbruh`
-database, merged over `config.toml` whenever that database is in use. Anything
-`config.toml` holds can go in one; `[storage]` is the exception, since it is
-what says where the city files themselves live.
+A database is a trip; a trip is in a city. The city is the reusable half.
 
-This is where things that are true of a place rather than of the tool belong:
+`cities/edinburgh.toml` holds what is true of Edinburgh however often you go:
 which landmarks its write-ups name and how they spell them, the destinations
 worth measuring to, what tax is charged and in what currency, and any weights
-that read differently there (parking matters less in a city centre). Two trips
-in play at once are two files, and neither one's numbers move while you work on
-the other.
+that read differently there. These are committed — a city you have worked out
+once is worth keeping and worth someone else having.
 
-Settings are rebound whenever `database.current()` resolves a different name,
-so `db edinbruh` at the prompt moves the landmarks, destinations and rates
-together, and `db` prints which file is in force. The older arrangement still
-works and needs no migrating: destinations in `config.toml` may carry
-`db = "<name>"`, and one that names none counts everywhere.
+`<db>.toml` beside `<db>.json` names the city and holds whatever is true of
+this trip alone (how many ways the bill splits, a must-have that only matters
+this time). It is one line most of the time, and is not committed.
+
+```
+db autumn-edinburgh --new       # asks which city; existing names are offered
+db autumn-edinburgh --city edinburgh
+```
+
+Naming a city that has no config starts one from a commented template. Both
+commands print what came with it — how many destinations and landmarks — and
+`db` with no argument lists each database against its city.
+
+Settings are rebound whenever `database.current()` resolves a different
+database, so switching at the prompt moves the landmarks, destinations and
+rates together. The older arrangement still works and needs no migrating:
+destinations in `config.toml` may carry `db = "<name>"`, and one that names
+none counts everywhere.
 
 ## Using it in another country
 
-A new city is a new database and a `<name>.toml` beside it. Nothing in that
-needs code: currency codes, tax rate, share split, destinations, landmarks,
-scoring weights, gates, columns. OSRM and Nominatim cover the world.
+A new city is a file in `cities/`. Nothing in it needs code: currency codes,
+tax rate, destinations, landmarks, scoring weights, gates, columns. OSRM and
+Nominatim cover the world.
 
 The landmark table is the part worth building deliberately. Capture a dozen
 listings first, read the write-ups (`show <id>` prints them in full), and write
 down the places they keep naming — that is what turns "8 minutes from the
-station" into a figure in the walk column. `edinbruh.toml` is a worked example.
+station" into a figure in the walk column. `cities/edinburgh.toml` is a worked
+example; `cities/oban.toml` is one with destinations and no landmarks yet.
 
 Needs code:
 
@@ -324,9 +336,10 @@ summary.py            prose reader, landmark trilateration
 scoring.py            tiers, bonuses, value, gates
 proximity.py          walking times (OSRM / Google), geocoding
 database.py           which set of stays is active
-config.py             defaults, and the config.toml / <db>.toml overlays
-config.toml           settings every database shares
-<db>.toml             one database's own; edinbruh.toml is a worked example
+config.py             defaults, and the three overlays over them
+config.toml           settings everything shares
+cities/<city>.toml    one place: its landmarks, destinations, rates
+<db>.toml             one trip: which city it's in, and its own overrides
 bookmarklet.js        in-page extractor
 build_bookmarklet.py  builds the three installable forms
 test_bookmarklet.js   unit checks for the extractor

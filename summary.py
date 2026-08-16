@@ -44,9 +44,10 @@ order-of-magnitude test is enough to tell those apart while staying well clear o
 the honest gap between crow-flies and pavement.
 
 Which places count as landmarks is a fact about a city, so the table is empty
-here and comes from the database's own settings — `[[landmark]]` in
-edinbruh.toml, installed by `use_landmarks`. A new city is a list of names and
-the spellings its write-ups use, and nothing in this file changes.
+here and comes from the config of whichever city the database is in —
+`[[landmark]]` in cities/edinburgh.toml, installed by `use_landmarks`. A new
+city is a list of names and the spellings its write-ups use, and nothing in this
+file changes.
 
 Where those landmarks are can come from the corpus rather than a gazetteer.
 Thirty stays with known coordinates all quoting their distance to Edinburgh
@@ -105,7 +106,7 @@ FURTHEST = 60
 #
 # Which places a write-up names, and how it spells them, is a fact about a city
 # and not about this tool — so the table is empty here and filled from the
-# database's own settings, `[[landmark]]` in edinbruh.toml. `use_landmarks`
+# city's config, `[[landmark]]` in cities/edinburgh.toml. `use_landmarks`
 # below is what config.apply calls to install one.
 #
 # The name is what gets stored; `match` is every way the corpus spells it, and
