@@ -159,6 +159,31 @@
   // Backwards-compatible alias used by the tests.
   function poundAmounts(text) { return moneyAmounts(text).values; }
 
+  // A discounted total is printed twice over: struck-through original beside
+  // the new figure, then both again in words for a screen reader —
+  //
+  //     $1,123 $1,013 Original price $1,123 Current price $1,013
+  //
+  // which is four numbers for one price, and two of them a price nobody is
+  // charged. Read blind across a table of eight plans, the eight largest
+  // amounts on the page came back as every original and not one figure you
+  // could actually pay — including not the one this capture went on to take.
+  //
+  // "Current price" is the site saying which is which, so where it appears it
+  // settles the list outright.
+  function currentPrices(text) {
+    var re = /current price\s*(?:US\$|C\$|A\$|£|€|\$)\s?(\d{1,3}(?:,\d{3})*|\d+)(?:[.,](\d{2}))?/gi;
+    var seen = {}, out = [], m;
+    while ((m = re.exec(text)) !== null) {
+      var v = parseFloat(m[1].replace(/,/g, "") + (m[2] ? "." + m[2] : ""));
+      if (v >= 20 && v <= 100000 && !seen[v]) { seen[v] = 1; out.push(v); }
+    }
+    // Cheapest first, and the cap trims the far end: the plan this tool takes
+    // is the cheapest one, so a table too long to list whole must not be cut
+    // from the end that has it. That is exactly how the price went missing.
+    return out.sort(function (a, b) { return a - b; }).slice(0, 8);
+  }
+
   // ── the write-up ─────────────────────────────────────────────────────────
 
   // The listing's own prose is the part of a page no schema has a column for —
@@ -288,6 +313,68 @@
   var WORD_NUMBERS = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8
   };
+
+  // One page, four apartments. An apart-hotel lists every unit type in the one
+  // table — Rowand, Kerr, Tait, Elliot, two rate plans each — and read as a
+  // single block the layout comes out fused: "Bedroom 1" and "Living room"
+  // from the first suite, "Bedroom 2" and "Bathrooms: 2" from the fourth, and
+  // a one-bedroom flat with a sofa bed in the lounge is filed as having two
+  // bedrooms and two bathrooms.
+  //
+  // Which is the exact shape the bedroom must-have was hardened against and
+  // then let through by another door: a stated bedroom count wins over the
+  // URL's room count precisely because the page's answer beats the search's
+  // question, so a fused count of two clears a two-bedroom gate outright, on a
+  // property where the thing being priced has one.
+  //
+  // Each unit's capacity line — "Sleeps: 3 adults", "Max. people: 4" — is
+  // printed once, above that unit's beds, which is where one description
+  // starts. Anything before the first marker belongs to the first unit: a
+  // block that lists its beds and then its capacity is the ordinary
+  // single-unit shape, and a single marker means no split at all.
+  var CAPACITY_MARK =
+    /max\.?\s*(?:people|persons?|guests?)\s*:?\s*\d+|sleeps\s*:\s*\d+/gi;
+
+  function splitUnits(text) {
+    var at = [], m;
+    CAPACITY_MARK.lastIndex = 0;
+    while ((m = CAPACITY_MARK.exec(text)) !== null) at.push(m.index);
+    if (at.length < 2) return [String(text)];
+    var out = [];
+    for (var i = 0; i < at.length; i++) {
+      out.push(String(text).slice(i === 0 ? 0 : at[i],
+                                  i + 1 < at.length ? at[i + 1] : text.length));
+    }
+    return out;
+  }
+
+  // Which of them the price belongs to. The captured price is the cheapest
+  // plan the page offers (the sr_pri_blocks note below is where that comes
+  // from), so the unit carrying it is the one whose cheapest plan is cheapest
+  // of all — and that unit's layout is the layout the price buys. Checked on
+  // the page this was written from: 747.93 GBP captured against eight plans
+  // spanning $1,013 to $1,631, and $1,013 is the one-bedroom Rowand Suite, not
+  // the two-bedroom Elliot that the fused read had described.
+  //
+  // Ranking on the cheapest *current* price per unit rather than on any amount
+  // in it keeps the comparison between like figures — a nightly rate and a
+  // stay total sit side by side in every one of these blocks.
+  function pricedUnit(text) {
+    var units = splitUnits(text);
+    if (units.length < 2) return units[0];
+    var best = null, bestPrice = null;
+    for (var i = 0; i < units.length; i++) {
+      var prices = currentPrices(units[i]);
+      if (!prices.length) prices = moneyAmounts(units[i]).values;
+      if (!prices.length) continue;
+      var low = Math.min.apply(null, prices);
+      if (bestPrice === null || low < bestPrice) { bestPrice = low; best = units[i]; }
+    }
+    // A table where nothing priced is one we can't choose inside, and the
+    // fused read is still the wrong answer to fall back on: the first unit is
+    // at least one real apartment rather than a composite of four.
+    return best || units[0];
+  }
 
   // Booking writes it as innerText with line breaks, the node harness as one
   // collapsed blob. Matching globally over the joined string reads both.
@@ -663,7 +750,10 @@
       // page text rather than a selector: it survives the class-name churn,
       // and the labels ("Bedroom 1", "Living room") are the site's own words
       // in the rendered output whatever the markup around them is doing.
-      var layout = parseRooms(dom.rooms || ctx.text || "");
+      // Narrowed first to the one unit the price is for, because a table
+      // holding several describes no single apartment when read whole.
+      var block = pricedUnit(dom.rooms || ctx.text || "");
+      var layout = parseRooms(block);
       if (layout.beds.length) rec.beds = layout.beds;
       if (layout.bedrooms != null) rec.bedrooms = layout.bedrooms;
       if (layout.bathrooms != null) rec.bathrooms = layout.bathrooms;
@@ -675,7 +765,8 @@
       if (!rec.beds && dom.beds && dom.beds.length) rec.beds = parseBeds(dom.beds);
 
       var money = moneyAmounts(ctx.text || "");
-      rec.price_candidates = money.values;
+      var current = currentPrices(ctx.text || "");
+      rec.price_candidates = current.length ? current : money.values;
       if (money.currency) rec.currency = money.currency;
 
       // What the price leaves out, stated under the room block. A miss re-reads
@@ -684,8 +775,15 @@
       // of the block reads exactly like a block that stated nothing. The cost
       // of being wrong here is silent — the flat estimate stands in and the
       // total is a plausible 20 short — so it's worth the second look.
-      var charges = parseCharges(dom.rooms || ctx.text || "");
+      // Read from the priced unit first, since the rates are stated under each
+      // block and a table of four states them four times: taking the first
+      // would be quoting whichever apartment happens to be listed top, which
+      // is only the priced one by luck.
+      var charges = parseCharges(block);
       if (!charges.taxes && !charges.fees_included && dom.rooms) {
+        charges = parseCharges(dom.rooms);
+      }
+      if (!charges.taxes && !charges.fees_included) {
         charges = parseCharges(ctx.text || "");
       }
       if (charges.taxes) rec.taxes = charges.taxes;
@@ -710,11 +808,33 @@
       // screen and £758.70 at checkout, and only the second is that number
       // plus the stated taxes. Filing it as the display currency labelled a
       // pound figure as dollars and then let the table convert it again.
-      var pri = /sr_pri_blocks=[^&]*?__(\d+)/.exec(ctx.url || "");
-      if (pri) {
-        var amount = parseInt(pri[1], 10) / 100;
+      var pri = /sr_pri_blocks=([^&]*)/.exec(ctx.url || "");
+      var blocks = pri ? (pri[1].match(/__\d+/g) || []) : [];
+      if (blocks.length) {
+        var amount = parseInt(blocks[0].slice(2), 10) / 100;
         if (amount >= 10 && amount <= 100000) {
           rec.native_price = amount;
+          // `no_rooms` is how many rooms the *search* asked for, and this is
+          // the price of one block: one room. Three adults searched as
+          // no_rooms=2 and landing on an apartment that sleeps three are
+          // quoted one apartment, and filing two rooms against a one-apartment
+          // price makes the record disagree with its own number and print
+          // "2 rooms booked" underneath it.
+          //
+          // Narrowed only, and only on both counts: one block priced, and a
+          // unit whose stated capacity actually holds the party. Where it
+          // doesn't — three of you in rooms that sleep two — the search asked
+          // for two rooms because it needs two, and the answer stands.
+          //
+          // A URL listing several blocks is a shape not seen yet, and whether
+          // the extra ids are more rooms or alternative plans decides both
+          // this and whether their prices should be added. So it changes
+          // nothing there: the search's room count and the first block's
+          // price, exactly as before.
+          if (blocks.length === 1 && rec.rooms > 1 &&
+              rec.sleeps && rec.adults && rec.sleeps >= rec.adults) {
+            rec.rooms = 1;
+          }
           // The property's country, off the URL, says which currency that is;
           // a fee quoted with a symbol says so outright and is believed first.
           rec.native_currency =
@@ -747,7 +867,8 @@
   // Exported for the node test harness; harmless in a browser.
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
-      extract: extract, poundAmounts: poundAmounts,
+      extract: extract, poundAmounts: poundAmounts, currentPrices: currentPrices,
+      splitUnits: splitUnits, pricedUnit: pricedUnit,
       parseBeds: parseBeds, parseRooms: parseRooms, parseCharges: parseCharges,
       parseSubscores: parseSubscores,
       parseScore: parseScore, parseReviews: parseReviews,

@@ -295,6 +295,15 @@ rather than scoring zero — an unread layout must not read as a place where
 everyone gets a door. It shows up in `show`'s `no data:` tail, as everything
 unmeasured does.
 
+An apart-hotel lists every apartment type in the one table — four suites, two
+rate plans each — and read whole that table describes no apartment that exists.
+The first suite's bedroom and living room, the last one's second bedroom and
+its `Bathrooms: 2`, fused into a one-bedroom flat recorded as having two of
+each. So the table is split at each unit's capacity line, which is the site's
+own marker for where one description starts, and only the priced unit is read.
+The priced one is the cheapest — the same rule the captured price already
+follows — so the layout on the record is the layout that price buys.
+
 The **summary** is captured but not scored, and deliberately so: nothing here
 reads prose, and a number quietly derived from one would be a judgement you
 couldn't check. It's kept because it's the evidence — the sofa bed, the steep
@@ -338,6 +347,14 @@ asked for. A one-bedroom apartment turned up by a two-room search cleared a
 two-bedroom must-have on the strength of the question rather than the answer.
 Where no bedroom count is known, the room count is still the fallback, which
 is what keeps hotels working.
+
+Giving the stated count the last word is only worth anything if it is a count
+of one apartment, which is the other half of splitting the table above: a fused
+two is a stated count, and it cleared the same gate by the same route it was
+closed against. The room count gets narrowed to one on the same evidence —
+where the URL asked for two rooms, one block was priced, and the unit's own
+`Sleeps:` holds the whole party, you are being quoted one apartment, and
+recording two makes the record disagree with the price printed beside it.
 
 A stay that fails is marked `✗` and kept — you captured it, so it stays
 captured. `list --viable` hides them. A stay we simply lack the data on is
@@ -698,7 +715,14 @@ only way to check the Booking.com path, which has no JSON-LD and no
 `__NEXT_DATA__` to read.
 
 Where a page shows several plausible amounts and none is clearly the total, it
-reports them as candidates rather than guessing. On Booking.com the total is
+reports them as candidates rather than guessing. A discounted price is printed
+four times over — struck-through original, new figure, then both again in words
+for a screen reader — so where the page labels one `Current price`, that label
+picks the list: half of what's on screen is a price nobody is charged. The list
+is capped, and cut from the expensive end, since the cheapest is the one this
+tool would take. Sorted the other way round, a table of eight plans offered
+every pre-discount original and not one figure you could pay. On Booking.com
+the total is
 worked out from the room block's stated rates instead — see
 [the numbers](#the-numbers) — but a figure you've read off the checkout still
 beats it, and typing one in is taken as final.

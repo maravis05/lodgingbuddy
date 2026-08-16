@@ -10,7 +10,7 @@
  */
 
 const fs = require("fs");
-const { extract, parseRooms, parseCharges } = require("./bookmarklet.js");
+const { extract, parseRooms, parseCharges, pricedUnit } = require("./bookmarklet.js");
 
 function contextFromFile(path, url) {
   const html = fs.readFileSync(path, "utf8");
@@ -234,12 +234,157 @@ const SOURCE_CASES = [
   },
 ];
 
+// Dragon Suites at Rutland Square, trimmed but in the page's own order and
+// wording: four apartment types in one table, two rate plans each, and the
+// two-bedroom one listed last. Read whole it describes no apartment that
+// exists — Rowand's bedroom and living room, Elliot's second bedroom and
+// bathroom count — and the capture claimed two bedrooms and two bathrooms at
+// the price of the one-bedroom suite.
+const MULTI_UNIT_TABLE = [
+  "Book this apartment",
+  "Apartment Type    Today's Price    Your choices    Select an Apartment",
+  "Rowand Suite",
+  "Recommended for 3 adults",
+  "Sleeps: 3 adults",
+  "Bedroom 1: 1 queen bed ",
+  "Living room: 1 sofa bed ",
+  "Entire apartment702 feet²Private kitchenAttached bathroomPatioFree Wifi",
+  "$295 per night",
+  "$1,123 $1,013 Original price $1,123 Current price $1,013",
+  "3 nights",
+  "Included: £95 Cleaning fee per stay",
+  "Excluded: 20 % VAT, 5 % City tax",
+  "Non-refundable",
+  "$344 per night",
+  "$1,288 $1,161 Original price $1,288 Current price $1,161",
+  "Included: £95 Cleaning fee per stay",
+  "Excluded: 20 % VAT, 5 % City tax",
+  "Free cancellation before October 4, 2026",
+  "Kerr Suite",
+  "Sleeps: 3 adults",
+  "Bedroom 1: 1 queen bed ",
+  "Living room: 1 sofa bed ",
+  "Entire apartment626 feet²Private kitchenAttached bathroomFree Wifi",
+  "$326 per night",
+  "$1,228 $1,107 Original price $1,228 Current price $1,107",
+  "Included: £95 Cleaning fee per stay",
+  "Excluded: 20 % VAT, 5 % City tax",
+  "$381 per night",
+  "$1,411 $1,270 Original price $1,411 Current price $1,270",
+  "Elliot Suite",
+  "Sleeps: 3 adults",
+  "Bedroom 1: 1 queen bed ",
+  "Bedroom 2: 1 queen bed ",
+  "Bathrooms:2 ",
+  "Entire apartment924 feet²Private kitchenAttached bathroomGarden view",
+  "Biggest Apartment Available",
+  "$382 per night",
+  "$1,416 $1,275 Original price $1,416 Current price $1,275",
+  "Included: £95 Cleaning fee per stay",
+  "Excluded: 20 % VAT, 5 % City tax",
+  "$446 per night",
+  "$1,631 $1,466 Original price $1,631 Current price $1,466",
+].join("\n");
+
+// The same table with the cheap suite listed last, so a pass that picks the
+// first unit rather than the priced one can't hold. Elliot's block moves to
+// the top; the answer must not move with it.
+const MULTI_UNIT_REORDERED = (() => {
+  const at = MULTI_UNIT_TABLE.indexOf("Elliot Suite");
+  return MULTI_UNIT_TABLE.slice(at) + "\n" + MULTI_UNIT_TABLE.slice(0, at);
+})();
+
+const UNIT_CASES = [
+  {
+    name: "four apartments in one table, priced one read alone",
+    rooms: MULTI_UNIT_TABLE,
+    want: { bedrooms: 1, bathrooms: null, sleeps: 3, rooms: 1,
+            beds: [["Bedroom 1", 1, "queen", true],
+                   ["Living room", 1, "sofa", false]],
+            cheapest: 1013 }
+  },
+  {
+    name: "cheapest apartment listed last, still the one read",
+    rooms: MULTI_UNIT_REORDERED,
+    want: { bedrooms: 1, bathrooms: null, sleeps: 3, rooms: 1,
+            beds: [["Bedroom 1", 1, "queen", true],
+                   ["Living room", 1, "sofa", false]],
+            cheapest: 1013 }
+  },
+  {
+    // The shape every earlier capture had, and the one that must not change:
+    // one apartment, one capacity line, nothing to choose between.
+    name: "single apartment is left whole",
+    rooms: "One-Bedroom Apartment\nSleeps: 3 adults\n" +
+           "Bedroom 1: 1 queen bed \nLiving room: 1 sofa bed \nBathrooms:1 \n" +
+           "$295 per night\n$1,123 $1,013 Original price $1,123 Current price $1,013\n" +
+           "Included: £95 Cleaning fee per stay\nExcluded: 20 % VAT, 5 % City tax",
+    want: { bedrooms: 1, bathrooms: 1, sleeps: 3, rooms: 1,
+            beds: [["Bedroom 1", 1, "queen", true],
+                   ["Living room", 1, "sofa", false]],
+            cheapest: 1013 }
+  },
+  {
+    // Two rooms asked for, two rooms needed: the units sleep two and the party
+    // is three, so nothing here says the search's answer was wrong.
+    name: "party doesn't fit one unit, so the room count stands",
+    rooms: "Double Room\nSleeps: 2 adults\nBedroom 1: 1 queen bed \n" +
+           "$150 per night\nCurrent price $450\n" +
+           "Twin Room\nSleeps: 2 adults\nBedroom 1: 2 single beds \n" +
+           "$160 per night\nCurrent price $480",
+    want: { bedrooms: 1, bathrooms: null, sleeps: 2, rooms: 2,
+            beds: [["Bedroom 1", 1, "queen", true]],
+            cheapest: 450 }
+  },
+];
+
 // The listing the arithmetic in b5298a2 was checked against: 673.24 pre-tax,
 // £828.00 at checkout once the stated rates and the untaxed fee are applied.
 const BOOKING_URL =
   "https://www.booking.com/hotel/gb/royal-mile-apartment-edinburgh-edinburgh.html" +
   "?checkin=2026-10-09&checkout=2026-10-12&group_adults=3&no_rooms=2" +
   "&sr_pri_blocks=1440389401_441029911_3_0_0__67324";
+
+// Through `extract` rather than against `pricedUnit` directly, because the
+// half that went wrong is the wiring: parseRooms was right about the text it
+// was handed and the text it was handed was four apartments at once.
+function checkUnits() {
+  let failed = 0;
+  for (const c of UNIT_CASES) {
+    const rec = extract({
+      url: BOOKING_URL, host: "www.booking.com", jsonld: [], next: null,
+      text: c.rooms, dom: { rooms: c.rooms }
+    });
+    const problems = [];
+    for (const k of ["bedrooms", "bathrooms", "sleeps", "rooms"]) {
+      if (rec[k] !== c.want[k]) problems.push(`${k}: got ${rec[k]}, want ${c.want[k]}`);
+    }
+    const flat = (rec.beds || []).map(b => [b.room, b.count, b.type, b.private]);
+    if (JSON.stringify(flat) !== JSON.stringify(c.want.beds)) {
+      problems.push(`beds:\n      got  ${JSON.stringify(flat)}\n      want ${JSON.stringify(c.want.beds)}`);
+    }
+    // The price this capture actually took is the cheapest on the page, so the
+    // candidate list has to reach it — the failure was a list of eight that
+    // stopped short of the only figure the record went on to use.
+    const cheapest = Math.min(...rec.price_candidates);
+    if (cheapest !== c.want.cheapest) {
+      problems.push(`cheapest candidate: got ${cheapest}, want ${c.want.cheapest}`);
+    }
+    // Struck-through originals are not prices anybody is charged.
+    const originals = rec.price_candidates.filter(v => [1123, 1288, 1228, 1411, 1416, 1631].includes(v));
+    if (originals.length) {
+      problems.push(`pre-discount amounts offered as prices: ${originals.join(", ")}`);
+    }
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
 
 function checkSources() {
   let failed = 0;
@@ -323,8 +468,9 @@ function checkRooms() {
 
 const [, , path, url] = process.argv;
 if (!path && !url) {
-  const failed = checkRooms() + checkCharges() + checkSources();
-  const total = CASES.length + CHARGE_CASES.length + SOURCE_CASES.length;
+  const failed = checkRooms() + checkCharges() + checkSources() + checkUnits();
+  const total = CASES.length + CHARGE_CASES.length + SOURCE_CASES.length +
+                UNIT_CASES.length;
   console.log(failed ? `\n${failed} failed` : `\n${total} passed`);
   process.exit(failed ? 1 : 0);
 }
