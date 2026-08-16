@@ -48,6 +48,13 @@ DEFAULTS = {
         "where_width": 20,
         "columns": ["name", "source", "space", "slp", "walk", "all_in",
                     "share_nt", "score", "points", "value"],
+        # What the write-up said, under each row. "line" is a second indented
+        # line per stay; "off" is columns only. There are `kind` and `traits`
+        # columns too, for a table you'd rather keep one row per stay.
+        "facts": "line",
+        # Traits are the long list, so the line takes the first few. Ordered by
+        # `facts_order` below, which is the only reason it isn't alphabetical.
+        "facts_traits": 6,
         "status_marks": {"ok": " ", "needs_price": "·", "blocked": "!"},
         "tax_marks": {"inclusive": "", "added": "+", "computed": "=",
                       "unknown": "?"},
@@ -97,6 +104,12 @@ DEFAULTS = {
         "bonuses": {
             "wifi": 4, "parking": 6, "kitchen": 5, "washing_machine": 3,
             "second_bathroom": 5, "hot_tub": 4, "fireplace": 3,
+            # Read out of the write-up. Weighted here on the same footing as
+            # anything scraped from a feature list, because they are the same
+            # kind of claim by the same seller.
+            "soundproofed": 4, "free_parking": 3, "adults_only": 2,
+            "lift": 2, "self_check_in": 2,
+            "visitor_levy": -3, "limited_parking": -2,
         },
     },
     # Gates, not preferences. A stay that fails one is kept and marked, never
@@ -115,6 +128,11 @@ DEFAULTS = {
         # Measure a stay as it's captured, so a row arrives finished. Costs
         # about half a second and one routing call per new stay.
         "on_capture": True,
+        # Where the router has no answer for a destination, use the walk the
+        # listing claims to it. Only ever fills a hole — a measured figure is
+        # never replaced — and only claims that survive the geometry check in
+        # summary.py. False keeps the walk column strictly measured.
+        "trust_claimed_walk": True,
         # "osrm" walks OpenStreetMap data and needs no key. "google" is the
         # Distance Matrix and does.
         "provider": "osrm",
@@ -224,6 +242,8 @@ NAME_WIDTH = CONFIG["display"]["name_width"]
 SOURCE_WIDTH = CONFIG["display"]["source_width"]
 WHERE_WIDTH = CONFIG["display"]["where_width"]
 COLUMNS = CONFIG["display"]["columns"]
+FACTS_LINE = CONFIG["display"]["facts"] == "line"
+FACTS_TRAITS = CONFIG["display"]["facts_traits"]
 STATUS_MARKS = CONFIG["display"]["status_marks"]
 TAX_MARKS = CONFIG["display"]["tax_marks"]
 GATE_MARKS = CONFIG["display"]["gate_marks"]
@@ -245,6 +265,7 @@ REQUIRED_AMENITIES = CONFIG["filters"]["require"]
 # proximity
 MAPS_ENABLED = CONFIG["maps"]["enabled"]
 MAPS_ON_CAPTURE = CONFIG["maps"]["on_capture"]
+TRUST_CLAIMED_WALK = CONFIG["maps"]["trust_claimed_walk"]
 MAPS_PROVIDER = CONFIG["maps"]["provider"]
 MAPS_USER_AGENT = CONFIG["maps"]["user_agent"]
 OSRM_HOST = CONFIG["maps"]["osrm_host"]

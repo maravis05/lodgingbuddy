@@ -171,15 +171,43 @@ def shares_without_a_door(rec: dict) -> float | None:
     return float(max(0, shares - shut))
 
 
+def walked(rec: dict) -> tuple[dict[str, float], bool]:
+    """Minutes to each destination, and whether any of them came from the prose.
+
+    The router's answer wins wherever there is one. A listing's own "8 minutes
+    from the castle" is a real fact and the write-up is where most of them live,
+    but it is the property describing itself, and where both exist the one that
+    measured the pavement is the better number.
+
+    Where there is no routed figure it is much better than the alternative,
+    which is a hole. A stay captured with maps off, or one the router couldn't
+    place, scored nothing at all for its location and sat at the bottom of the
+    table looking like somewhere remote.
+    """
+    import database  # local, for the same reason complaints() imports sources
+    import summary
+
+    measured = dict(rec.get("walk_minutes") or {})
+    if not config.TRUST_CLAIMED_WALK:
+        return measured, False
+    wanted = [d["label"] for d in config.destinations_for(database.current())]
+    borrowed = False
+    for label, minutes in summary.claimed_for(rec, wanted).items():
+        if label not in measured:
+            measured[label] = minutes
+            borrowed = True
+    return measured, borrowed
+
+
 def walk_minutes(rec: dict) -> float | None:
     """Minutes on foot to the places you named, weighted by how much each matters.
 
-    Weighted over the destinations we actually measured, not all of them, so one
-    lookup that failed doesn't quietly drag the average toward zero.
+    Weighted over the destinations we actually have a figure for, not all of
+    them, so one lookup that failed doesn't quietly drag the average toward zero.
     """
-    import database  # local, for the same reason complaints() imports sources
+    import database
 
-    measured = rec.get("walk_minutes") or {}
+    measured, _ = walked(rec)
     if not measured:
         return None
     weights = {d["label"]: d.get("weight", 1.0)
@@ -216,9 +244,19 @@ def complaints() -> list[str]:
     than per stay, so it reads as a settings problem rather than a data one.
     """
     import sources  # here, not at module scope: sources imports config, not us.
+    import summary
 
-    known_bonuses = set(sources.AMENITY_ALIASES) | {"second_bathroom"}
+    known_bonuses = (set(sources.AMENITY_ALIASES) | set(summary.TRAITS)
+                     | set(summary.KINDS) | {"second_bathroom"})
     out = []
+    # Not a settings problem but a code one, and this is the only place that
+    # sees both lists. summary.py fills `amenities` using its own patterns; if
+    # it learns a slug sources.py has never heard of, that slug silently can't
+    # be gated or scored on, and the fact reads as missing rather than as
+    # unnameable.
+    if adrift := summary.CORE - set(sources.AMENITY_ALIASES):
+        out.append(f"summary.py emits amenities sources.py doesn't define: "
+                   f"{', '.join(sorted(adrift))}")
     for name in config.TIERS:
         if name not in FACTORS:
             out.append(f"[scoring.tiers.{name}] — no such factor. "
@@ -269,10 +307,21 @@ def bonus_facts(rec: dict) -> dict[str, bool]:
 
     A bonus config knows nothing but a name and a number of points; this is
     where a name becomes a question about the record.
+
+    Amenities and traits answer here on the same footing, which is the point of
+    having gleaned them: `soundproofed` is worth whatever config.toml says it is
+    worth, and that it was read out of a paragraph rather than a feature list
+    doesn't change the sentence it came from. Points may be negative — a
+    `visitor_levy` is a fact you would rather know about, and the only honest
+    way to weight it is downward.
     """
     baths = rec.get("bathrooms") or 0
-    facts = {name: has(rec, name) for name in config.BONUSES}
-    # Two of them aren't amenity flags but facts about the property.
+    traits = set(rec.get("traits") or [])
+    kind = rec.get("kind")
+    facts = {name: has(rec, name) or name in traits or name == kind
+             for name in config.BONUSES}
+    # One of them isn't a flag at all but a count, and reads better named than
+    # written as a tier with a single band.
     if "second_bathroom" in facts:
         facts["second_bathroom"] = baths >= 2
     return facts

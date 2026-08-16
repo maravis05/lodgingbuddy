@@ -84,6 +84,12 @@ MILE = 1609.344
 # listings look like liars.
 DETOUR = 1.25
 
+# Past this many minutes a quoted distance stops being a walk. Set where it is
+# because an hour is roughly where "we could walk that" stops being said about a
+# city — and because the things quoted beyond it are airports and stadiums,
+# which are quoted to tell you where you are, not how you'd get there.
+FURTHEST = 60
+
 
 # --------------------------------------------------------------------------
 # Landmarks
@@ -136,6 +142,14 @@ _DIST = (
     r"|(?:a|an|\d+)[\s-]?(?:\d+[\s-])?minute\b)"
 )
 
+# Bare minutes — "Located 19 minutes from Edinburgh Castle" — with nothing
+# saying walking. Only usable where the template itself supplies the context,
+# i.e. where "from <landmark>" follows immediately; loose in the open it would
+# read check-in times and opening hours as distances.
+_DIST_LOOSE = _DIST.replace(
+    r"|\d+\s*minutes?(?:\s+on\s+foot|\s+away)",
+    r"|\d+\s*minutes?\b")
+
 # The five sentence shapes that bind a landmark to a distance. Anything looser
 # than these starts pairing a landmark with whatever number shares its sentence,
 # and a paragraph listing four attractions with four distances then yields
@@ -155,7 +169,12 @@ _TEMPLATES = [
     ("landmark (distance)",
      rf"(?P<lm>{_LM_ANY})\s*\({_QUAL}{_DIST}\)"),
     ("distance from landmark",
-     rf"{_QUAL}{_DIST}\s+(?:away\s+)?(?:from|of|to)\s+(?:the\s+)?(?P<lm>{_LM_ANY})"),
+     rf"{_QUAL}{_DIST_LOOSE}\s+(?:away\s+)?(?:from|of|to)\s+(?:the\s+)?(?P<lm>{_LM_ANY})"),
+    # "Edinburgh Waverley station 1312 feet away" — no verb at all, which is
+    # Booking's house style for a list of two. Anchored on the trailing "away"
+    # so it can't swallow the next sentence's number.
+    ("landmark distance away",
+     rf"(?P<lm>{_LM_ANY})[^.,;]{{0,25}}?\s+{_QUAL}{_DIST}\s+(?:away|nearby)"),
     ("distance landmark",
      rf"{_QUAL}{_DIST}\s+(?:from|of)?\s*(?P<lm>{_LM_ANY})"),
     ("landmark within distance",
@@ -172,9 +191,16 @@ _WORDS = {"a": 1, "an": 1, "one": 1, "single": 1, "two": 2, "three": 3,
           "four": 4, "five": 5, "six": 6}
 
 _BEDROOMS = [
-    re.compile(r"\b(one|two|three|four|five|\d+)[\s-]bed(?:room)?\b", re.I),
+    # "two bedrooms", "a one-bedroom apartment". Plural matters more than it
+    # looks: a Sykes write-up says "there are two bedrooms" with no verb this
+    # would recognise, and requiring one silently read that as no bedrooms.
+    re.compile(r"\b(one|two|three|four|five|six|\d+)[\s-]"
+               r"(?:spacious\s+|bright\s+|double\s+|large\s+)?bedrooms?\b", re.I),
+    # "a two-bed flat" — UK shorthand, and bedrooms rather than beds. Only with
+    # the hyphen: "two beds" unhyphenated is a bed count and a different fact.
+    re.compile(r"\b(one|two|three|four|five|six|\d+)-bed\b", re.I),
     re.compile(r"\b(?:features?|includes?|has|have|with|offers?|and)\s+"
-               r"(?:a\s+)?(one|two|three|four|five|\d+)\s+"
+               r"(?:a\s+)?(one|two|three|four|five|six|\d+)\s+"
                r"(?:spacious\s+|bright\s+|double\s+)?bedrooms?\b", re.I),
 ]
 _BATHROOMS = [
@@ -197,79 +223,113 @@ _KIND = [
 ]
 _KIND = [(n, re.compile(p, re.I)) for n, p in _KIND]
 
-# Facts worth a column or a filter. Kept flat and boolean on purpose: a scored
-# composite of these would be a second scoring.py, and there is already one.
-_FLAGS = {
-    "ground_floor": r"ground[- ]floor",
-    "upper_floor": r"(?:second|third|fourth|fifth|top)[- ]floor",
+# Amenities, in the vocabulary the records already speak — every slug here is
+# one of sources.AMENITY_ALIASES, so a fact read out of the prose and the same
+# fact read off the page land in the same field under the same name. Drift
+# between the two lists is worth catching rather than discovering, which is what
+# `CORE` and scoring.complaints() are for.
+#
+# Folded the way sources.normalise_amenities folds: a kitchenette is a kitchen
+# and a terrace is a balcony. Not because they're the same thing, but because
+# one page mustn't produce two different slugs depending on which reader saw it.
+_AMENITIES = {
+    "wifi": r"free\s+Wi-?Fi|\bWi-?Fi\b|\binternet\b",
+    "parking": r"\bparking\b|\bgarage\b|\bdriveway\b",
+    "kitchen": r"\bkitchen(?:ette)?\b|\bstovetop\b|\bhob\b|\boven\b",
+    "washing_machine": r"washing\s+machine|\blaundry\b",
+    "dishwasher": r"dishwasher",
+    "hot_tub": r"hot\s+tub|jacuzzi|whirlpool",
+    "fireplace": r"fireplace|wood\s*burner|log\s*burner|open\s+fire",
+    "pet_friendly": r"pet[\s-]friendly|pets\s+(?:are\s+)?(?:allowed|welcome)"
+                    r"|dog[\s-]friendly|welcome\s+dogs|bring(?:ing)?\s+dogs",
+    "air_conditioning": r"air[\s-]conditioning|air\s*con\b",
+    "heating": r"\bheating\b|central\s+heating|\bradiators?\b",
+    "tv": r"\bTVs?\b|flat[\s-]screen|satellite\s+TV|smart\s+TV|\d+-inch",
+    "balcony": r"\bbalcony\b|\bterrace\b|\bpatio\b",
+    "garden": r"\bgarden\b",
+    "sea_view": r"sea\s+views?|ocean\s+views?|loch\s+views?"
+                r"|views?\s+of\s+the\s+(?:Firth|bay)|Firth\s+of\s+Forth",
+    "pool": r"swimming\s+pool|\bpool\b",
     "lift": r"\belevator\b|\blift\b",
-    "free_parking": r"free\s+(?:on-site\s+)?(?:private\s+)?parking"
-                    r"|parking\s+is\s+free|free\s+private\s+parking",
-    "paid_parking": r"paid\s+(?:on-site\s+)?(?:private\s+)?parking"
-                    r"|on-site\s+paid\s+parking|[Cc]harges?\s+apply.*parking",
-    "limited_parking": r"limited\s+(?:underground\s+)?parking",
+    "ev_charger": r"EV\s+charging|electric\s+vehicle\s+charg|car\s+charg",
+    "breakfast": r"\bbreakfast\b",
+}
+_AMENITIES = {k: re.compile(v, re.I) for k, v in _AMENITIES.items()}
+
+# Every slug this module will ever put in `amenities`. sources.AMENITY_ALIASES
+# has to contain all of them or the two readers have quietly diverged.
+CORE = frozenset(_AMENITIES)
+
+# Everything else the prose knows and no field holds. Kept flat and boolean on
+# purpose: a scored composite of these would be a second scoring.py, and there
+# is already one — config.toml weights them, the same as any amenity.
+#
+# The line between this and the list above is only which vocabulary the record
+# already had. Nothing here is less of a fact than a dishwasher; `soundproofed`
+# on a Royal Mile flat is arguably the most useful thing in either list.
+_TRAITS = {
+    # shape of the place
+    "ground_floor": r"ground[\s-]floor",
+    "upper_floor": r"(?:second|third|fourth|fifth|top)[\s-]floor",
     "historic_building": r"historic\s+building|historic\s+setting|Georgian"
                          r"|built\s+in\s+\d{4}|cobbled\s+street",
     "renovated": r"recently\s+renovated|newly\s+renovated|new(?:ly)?\s+refurbished",
     "soundproofed": r"soundproof",
-    "adults_only": r"adults[\s-]only",
-    "family_rooms": r"family\s+rooms?",
-    "pets_allowed": r"pet[\s-]friendly|\bdogs?\s+(?:are|cannot|as)\b"
-                    r"|welcome\s+dogs|bring\s+dogs",
-    "breakfast_available": r"\bbreakfast\b",
-    "restaurant_on_site": r"\brestaurant\b(?!\s+reservations)|\bbrasserie\b",
+    "private_entrance": r"private\s+entrance",
+    "sofa_bed": r"sofa\s+bed",
+    "bathtub": r"\bbath\s+and\s+(?:a\s+)?(?:power\s+)?shower|\bwith\s+a\s+bath\b",
+    "private_bathroom": r"private\s+bathroom",
+    # what parking there is, which "parking" alone doesn't say
+    "free_parking": r"free\s+(?:on-site\s+)?(?:private\s+)?parking"
+                    r"|parking\s+is\s+free|free\s+private\s+parking",
+    "paid_parking": r"paid\s+(?:on-site\s+)?(?:private\s+)?parking"
+                    r"|on-site\s+paid\s+parking",
+    "limited_parking": r"limited\s+(?:underground\s+)?parking",
+    "bike_parking": r"bicycle\s+parking",
+    # kitchen fittings, which "kitchen" alone doesn't say
+    "microwave": r"microwave",
+    "coffee_machine": r"coffee\s+(?:machine|maker)|tea\s+and\s+coffee"
+                      r"|tea\s*/\s*coffee",
+    "kettle": r"\bkettle\b",
+    "dining_area": r"dining\s+(?:table|area)",
+    # serviced-building things, which separate an aparthotel from a flat
     "reception_24h": r"24-hour\s+(?:reception|front\s+desk)",
     "self_check_in": r"private\s+check-in|express\s+check-in|self\s+check-in",
-    "sea_view": r"sea\s+views?|views?\s+of\s+the\s+(?:Firth|bay)|Firth\s+of\s+Forth",
-    "city_view": r"city\s+views?",
-    "garden_view": r"garden\s+views?",
+    "concierge": r"concierge",
+    "luggage_storage": r"luggage\s+storage",
+    "laundry_service": r"laundry\s+service",
+    # Singular is the property's own; plural is the neighbourhood's. That reads
+    # like a trick and is the actual rule across the corpus — "features a
+    # restaurant" and "the hotel's award-winning restaurant" against "bars,
+    # restaurants, shops" and "the surrounding area offers restaurants". The one
+    # singular that isn't a restaurant is the concierge making you a booking at
+    # somebody else's.
+    "restaurant_on_site": r"\brestaurant\b(?!s)(?!\s+reservations)|\bbrasserie\b",
+    "gym": r"\bgym\b|fitness\s+(?:club|centre|center|classes)",
+    "sauna": r"\bsauna\b",
+    # who may stay, and what it will cost on the day
+    "adults_only": r"adults[\s-]only",
+    "family_rooms": r"family\s+rooms?",
     "licensed": r"licen[cs]e\s+numbers?|operated\s+under\s+licen",
     "visitor_levy": r"[Vv]isitor\s+[Ll]evy",
-}
-_FLAGS = {k: re.compile(v, re.I) for k, v in _FLAGS.items()}
-
-# Amenities the structured field routinely omits. Names match the vocabulary
-# already in the records where one exists, so a merge doesn't create a second
-# spelling of the same thing.
-_AMENITIES = {
-    "wifi": r"free\s+Wi-?Fi",
-    "kitchen": r"\bkitchen\b(?!ette)",
-    "kitchenette": r"kitchenette",
-    "washing_machine": r"washing\s+machine",
-    "dishwasher": r"dishwasher",
-    "microwave": r"microwave",
-    "oven": r"\boven\b|\bstovetop\b|\bhob\b",
-    "coffee_machine": r"coffee\s+(?:machine|maker)|tea\s+and\s+coffee|tea\s*/\s*coffee",
-    "kettle": r"\bkettle\b",
-    "tv": r"\bTV\b|flat-screen|satellite\s+TV|\d+-inch",
+    # views other than the sea, which already has a field
+    "city_view": r"city\s+views?",
+    "garden_view": r"garden\s+views?",
+    # small comforts
     "streaming": r"streaming\s+services",
     "hairdryer": r"hairdryer",
     "toiletries": r"free\s+toiletries",
     "wardrobe": r"wardrobe",
     "work_desk": r"work\s+desk",
-    "dining_area": r"dining\s+(?:table|area)",
-    "fireplace": r"fireplace",
-    "air_conditioning": r"air[\s-]conditioning",
-    "bathtub": r"\bbath\s+and\s+(?:a\s+)?(?:power\s+)?shower|\bwith\s+a\s+bath\b",
-    "private_entrance": r"private\s+entrance",
-    "private_bathroom": r"private\s+bathroom",
-    "balcony": r"\bbalcony\b",
-    "terrace": r"\bterrace\b",
-    "garden": r"\bgarden\b",
-    "concierge": r"concierge",
-    "luggage_storage": r"luggage\s+storage",
-    "laundry_service": r"laundry\s+service",
-    "gym": r"\bgym\b|fitness\s+(?:club|centre|center|classes)",
-    "sauna": r"\bsauna\b",
-    "pool": r"swimming\s+pool|\bpool\b",
-    "bike_parking": r"bicycle\s+parking",
-    "ev_charging": r"EV\s+charging",
-    "sofa_bed": r"sofa\s+bed",
-    "parking": r"\bparking\b",
-    "pet_friendly": r"pet[\s-]friendly",
-    "heating": r"\bheating\b",
 }
-_AMENITIES = {k: re.compile(v, re.I) for k, v in _AMENITIES.items()}
+_TRAITS = {k: re.compile(v, re.I) for k, v in _TRAITS.items()}
+
+# Every slug this module will ever put in `traits`, for config to validate against.
+TRAITS = frozenset(_TRAITS)
+
+# What a property is. Also a trait as far as config.toml is concerned, but it is
+# one answer out of four rather than a flag, so it gets its own field.
+KINDS = ("apartment", "aparthotel", "hotel", "guesthouse")
 
 # Sentences that describe the region rather than the property. Dropped before
 # anything else looks at the text.
@@ -311,27 +371,36 @@ class Reading:
     # reports a conflict against a record that was right.
     bathrooms_at_least: bool = False
     amenities: set[str] = field(default_factory=set)
-    flags: set[str] = field(default_factory=set)
+    traits: set[str] = field(default_factory=set)
     claims: list[Claim] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     machine_written: bool = False
     dropped: int = 0
 
     def walk_minutes(self) -> dict[str, int]:
-        """Minutes on foot per landmark, in the shape proximity.py writes.
+        """Minutes on foot per landmark, nearest first.
 
-        Ceilings and drives are left out. "less than 1 km" is a marketing
-        upper bound and a drive is not a walk, and neither belongs in a column
-        the table sorts by.
+        Ceilings and drives are left out. "less than 1 km" is a marketing upper
+        bound and a drive is not a walk, and neither belongs in a column the
+        table sorts by.
+
+        Nor is anything past FURTHEST. "Edinburgh Airport is 6.2 mi away" is a
+        true sentence and dividing it by a walking pace produces 125 minutes,
+        which is arithmetic rather than a fact about anybody's afternoon. A
+        distance quoted that far out is quoted for orientation, and reading it
+        as a walk fills the record with journeys nobody is going to make.
         """
-        out: dict[str, float] = {}
+        out: dict[str, tuple[float, bool]] = {}
         for c in self.claims:
             if c.doubted or c.upper_bound or c.unit == "drive":
+                continue
+            if c.minutes > FURTHEST:
                 continue
             # A stated walking time beats one we derived from a distance.
             if c.landmark not in out or (c.stated and not out[c.landmark][1]):
                 out[c.landmark] = (c.minutes, c.stated)
-        return {k: round(v[0]) for k, v in out.items()}
+        return {k: round(v[0]) for k, v in
+                sorted(out.items(), key=lambda kv: kv[1][0])}
 
 
 def _number(word: str) -> int | None:
@@ -433,13 +502,7 @@ def read(record: dict) -> Reading:
         out.bathrooms, out.bathrooms_at_least = 1, True
 
     out.amenities = {k for k, p in _AMENITIES.items() if p.search(text)}
-    # "kitchenette" and "kitchen" are the same field to a filter, and the
-    # write-ups use them interchangeably for the same galley.
-    if "kitchenette" in out.amenities:
-        out.amenities.add("kitchen")
-    out.flags = {k for k, p in _FLAGS.items() if p.search(text)}
-    if "free_parking" in out.flags or "paid_parking" in out.flags:
-        out.amenities.add("parking")
+    out.traits = {k for k, p in _TRAITS.items() if p.search(text)}
 
     out.claims = _claims(_mask_name(text, record.get("name")))
     _doubt(out.claims, record)
@@ -638,7 +701,13 @@ class Verdict:
     confirms: dict = field(default_factory=dict)   # both agree
     conflicts: dict = field(default_factory=dict)  # (record value, text value)
     new_amenities: set = field(default_factory=set)
+    new_traits: set = field(default_factory=set)
+    claimed_walk: dict = field(default_factory=dict)
     doubted: list = field(default_factory=list)
+
+    def anything(self) -> bool:
+        return bool(self.fills or self.new_amenities or self.new_traits
+                    or self.claimed_walk or self.conflicts)
 
 
 def against(record: dict, reading: Reading) -> Verdict:
@@ -646,11 +715,12 @@ def against(record: dict, reading: Reading) -> Verdict:
 
     The split that matters is fills against conflicts. A null filled from the
     text is free; a scraped 2 bedrooms against a sentence saying three is a
-    question for a person, and answering it here would mean picking a winner
-    out of sight of anyone who could tell.
+    question for a person, and `apply` leaves that one alone for exactly the
+    reason you'd expect — picking a winner here means picking it out of sight of
+    anyone who could tell.
     """
     v = Verdict()
-    for name in ("bedrooms", "bathrooms"):
+    for name in ("bedrooms", "bathrooms", "kind"):
         claimed = getattr(reading, name)
         if claimed is None:
             continue
@@ -663,11 +733,76 @@ def against(record: dict, reading: Reading) -> Verdict:
         else:
             v.conflicts[name] = (held, claimed)
 
-    held_walk = record.get("walk_minutes") or {}
-    for landmark, minutes in reading.walk_minutes().items():
-        if landmark not in held_walk:
-            v.fills.setdefault("walk_minutes", {})[landmark] = minutes
-
     v.new_amenities = reading.amenities - set(record.get("amenities") or [])
+    v.new_traits = reading.traits - set(record.get("traits") or [])
+    v.claimed_walk = reading.walk_minutes()
     v.doubted = [c for c in reading.claims if c.doubted]
     return v
+
+
+def apply(record: dict, places: dict | None = None,
+          detour: float = DETOUR, reading: Reading | None = None) -> Verdict:
+    """Write what the prose says into the record, and say what was written.
+
+    `places` is what `locate` fitted from the whole database, and without it
+    nothing can be disbelieved — a lone record cannot tell you that its castle
+    is in the wrong place. Callers holding the corpus should fit it once and
+    pass it to every apply; a caller that doesn't will simply file the claims
+    as written, which is the old behaviour and no worse than not reading them.
+
+    Only into holes. A field the page stated outright is the better fact and
+    stays — this runs after every capture, and a re-capture that finally scrapes
+    a bathroom count must not find a gleaned one squatting in the field. That
+    also makes it safe to run repeatedly, which it has to be: the summary
+    usually arrives later than the record, by bookmarklet or by `set --summary`,
+    so the read has to happen again every time either one changes.
+
+    Amenities are added to, never replaced. `set --amenities` replaces because
+    correcting a scrape usually means the list was wrong; this is the opposite
+    case — the prose found a dishwasher the amenity block didn't mention, and
+    nothing about that says the block's entries were mistaken.
+
+    `gleaned` is rebuilt from scratch each time rather than appended to, so it
+    always names what is *currently* in a field because of the prose, and a
+    field since filled by a real scrape drops off it.
+    """
+    reading = read(record) if reading is None else reading
+    if places:
+        _doubt(reading.claims, record, places, detour)
+    v = against(record, reading)
+
+    for name, value in v.fills.items():
+        record[name] = value
+    if v.new_amenities:
+        record["amenities"] = sorted(set(record.get("amenities") or [])
+                                     | v.new_amenities)
+    if reading.traits:
+        record["traits"] = sorted(set(record.get("traits") or []) | reading.traits)
+    if v.claimed_walk:
+        record["walk_claimed"] = v.claimed_walk
+
+    # Provenance, and the reason `list` can mark a gleaned figure differently
+    # from a scraped one. A fact being as good as a scraped fact is not the same
+    # as it being indistinguishable from one.
+    record["gleaned"] = sorted(v.fills) or None
+    return v
+
+
+def claimed_for(record: dict, labels: list[str]) -> dict[str, int]:
+    """The prose's walk times, re-keyed to the destinations you named.
+
+    The write-up says "Waverley" and config.toml says "Edinburgh Waverley", and
+    they are the same station. Matched by containment either way round, which is
+    loose enough for that and tight enough that no two destinations in a sane
+    config both answer to one landmark.
+    """
+    claimed = record.get("walk_claimed") or {}
+    out = {}
+    for label in labels:
+        want = label.strip().lower()
+        for landmark, minutes in claimed.items():
+            have = landmark.strip().lower()
+            if want == have or want in have or have in want:
+                out[label] = minutes
+                break
+    return out

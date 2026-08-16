@@ -81,6 +81,17 @@ def blank_record() -> dict:
         # dozen ways, and a config that gates on "parking" shouldn't have to
         # know which of them this site picked.
         "amenities": None,
+        # What the prose says the place is — apartment, aparthotel, hotel,
+        # guesthouse — and the facts it holds that no other field does:
+        # soundproofed, ground_floor, adults_only, visitor_levy. Read out of
+        # `summary` by summary.py at capture, and weighted in config.toml
+        # alongside the amenities, because a fact's worth doesn't depend on
+        # which part of the page it was written on.
+        "kind": None, "traits": None,
+        # Which fields above are currently holding a value that came from the
+        # prose rather than from the page's own markup. Rebuilt on every read,
+        # so a field a later scrape fills properly drops off it.
+        "gleaned": None,
         # The listing's own words, kept verbatim rather than parsed. Filled by
         # the bookmarklet, which reads the rendered page, and topped up by hand
         # at the prompt; the adapters below never set it, so a `refresh` can't
@@ -102,6 +113,14 @@ def blank_record() -> dict:
         # Minutes on foot to each destination in config.toml. Filled by `walk`,
         # never by a capture — no listing page knows where you want to go.
         "walk_minutes": None,
+        # Minutes on foot to whatever landmarks the write-up chose to mention,
+        # keyed by its names for them rather than yours. Kept apart from the
+        # measured figures on purpose: these are the property selling itself,
+        # they name places you may not care about, and averaging the two
+        # together would mix a routing engine's answer with a marketer's. What
+        # they are good for is a stay the router never reached — see
+        # scoring.walk_minutes.
+        "walk_claimed": None,
         # Your own marks out of 5, for the things no scrape reaches.
         "look": None, "clean": None,
         # ours

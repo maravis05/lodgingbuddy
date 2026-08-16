@@ -43,6 +43,7 @@ import database
 import proximity
 import scoring
 import sources
+import summary
 
 
 # How to tell someone to run this, in the spelling that works where they are.
@@ -307,6 +308,21 @@ def ruled_out(rec: dict) -> list[tuple[str, str]]:
     return scoring.gates(rec)
 
 
+def glean(rec: dict, stays: list[dict]):
+    """Read this stay's write-up, checked against everything else we hold.
+
+    The corpus is passed in because the geometry check is the one part of this
+    that a single record can't do alone: knowing that "Edinburgh Castle is a
+    1-minute walk" is false means knowing roughly where the castle is, and that
+    comes from the other thirty stays that quoted a distance to it. Fitted here
+    on every capture rather than cached, because it costs a few milliseconds and
+    a cache that goes stale as stays are added would be wrong in the direction
+    that matters — trusting a claim it should have caught.
+    """
+    places, detour = summary.locate(stays)
+    return summary.apply(rec, places, detour)
+
+
 def measure_walk(rec: dict) -> None:
     """Walk a stay to your destinations as it's captured, in place.
 
@@ -390,6 +406,7 @@ def cmd_add(args) -> int:
     # previous capture still counts as a price.
     if rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    glean(rec, stays)
     measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
@@ -452,10 +469,18 @@ def cmd_set(args) -> int:
         rec["native_currency"] = config.NATIVE_CURRENCY
     if rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    # The write-up usually turns up after the record does — pasted from the
+    # bookmarklet, or typed here. Reading it on the way past is what stops
+    # `set --summary` being a thing you then have to remember to follow with
+    # something else. Anything typed on this same line was set above and so is
+    # no longer a hole for it to fill.
+    gleaned = glean(rec, stays)
     save(stays)
 
     amount, cur, estimated = all_in(rec)
     print(f"Updated {rec['name']}")
+    if args.summary is not None:
+        print(f"  {describe_gleaned(rec, gleaned) or 'nothing new in the write-up'}")
     if amount:
         vat = rec.get("vat_rate") or config.VAT_RATE
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
@@ -491,6 +516,69 @@ def _pct(value: float | None) -> str:
     return f"{value:.0f}%" if value is not None else "—"
 
 
+# Traits read better as English than as slugs, and a few of them read badly
+# either way. Only the awkward ones are named here; the rest just lose their
+# underscores.
+TRAIT_WORDS = {
+    "reception_24h": "24h reception",
+    "self_check_in": "self check-in",
+    "restaurant_on_site": "restaurant",
+    "visitor_levy": "visitor levy!",
+    "bathtub": "bath",
+    "adults_only": "adults only",
+    "upper_floor": "upstairs",
+    "ground_floor": "ground floor",
+}
+
+# Which traits earn the limited room on the facts line. The ones that would
+# change your mind come first — where you sleep, what it costs on the day, who
+# is allowed — and the fittings that merely confirm it's a normal flat come
+# last. Anything unlisted sorts after these, alphabetically.
+TRAIT_ORDER = [
+    "adults_only", "visitor_levy", "soundproofed", "ground_floor",
+    "upper_floor", "historic_building", "renovated", "free_parking",
+    "paid_parking", "limited_parking", "private_entrance", "private_bathroom",
+    "bathtub", "sofa_bed", "family_rooms", "reception_24h", "self_check_in",
+    "concierge", "restaurant_on_site", "gym", "sauna", "city_view",
+    "garden_view", "licensed",
+]
+
+
+def trait_words(traits: list[str], limit: int | None = None) -> str:
+    """A record's traits as a phrase, most decisive first."""
+    rank = {name: i for i, name in enumerate(TRAIT_ORDER)}
+    ordered = sorted(traits, key=lambda t: (rank.get(t, len(rank)), t))
+    shown = ordered if limit is None else ordered[:limit]
+    words = [TRAIT_WORDS.get(t, t.replace("_", " ")) for t in shown]
+    if limit is not None and len(ordered) > limit:
+        words.append(f"+{len(ordered) - limit}")
+    return ", ".join(words)
+
+
+def describe_gleaned(rec: dict, verdict=None) -> str:
+    """What this stay's write-up gave us that nothing else did.
+
+    Reads the record rather than the verdict wherever it can, so the same
+    sentence describes a stay captured just now and one captured last week —
+    a line that only appears on fresh captures is a line you can't trust the
+    absence of.
+    """
+    parts = []
+    if rec.get("kind"):
+        parts.append(rec["kind"])
+    if traits := rec.get("traits"):
+        parts.append(trait_words(traits, config.FACTS_TRAITS))
+    if gleaned := rec.get("gleaned"):
+        # Named rather than shown: the values are already in the columns above,
+        # and what this adds is where they came from.
+        parts.append("from the prose: " + ", ".join(gleaned))
+    if verdict is not None and verdict.conflicts:
+        parts.append("disagrees with the page on "
+                     + ", ".join(f"{k} ({held} vs {said})"
+                                 for k, (held, said) in verdict.conflicts.items()))
+    return " · ".join(parts)
+
+
 # Each column as (header, how to render one row). Which of them `list` prints,
 # and in what order, is `columns` in config.toml — the table got wide enough
 # that "all of them" stopped being a sensible default for every trip.
@@ -513,8 +601,15 @@ COLUMNS = {
     "reviews":  ("Revs", lambda r, ctx: str(r.get("reviews") or "—")),
     "clean":    ("Clean", lambda r, ctx: _pct(scoring.cleanliness(r))),
     "look":     ("Look", lambda r, ctx: _pct(scoring.look(r))),
-    "walk":     ("Walk", lambda r, ctx: (f"{scoring.walk_minutes(r):.0f}m"
+    # "≈" says the figure is the listing's own claim rather than a routed one.
+    # Same column because it answers the same question, marked because it was
+    # answered by the seller.
+    "walk":     ("Walk", lambda r, ctx: (f"{scoring.walked(r)[1] and '≈' or ''}"
+                                         f"{scoring.walk_minutes(r):.0f}m"
                                          if scoring.walk_minutes(r) is not None else "—")),
+    "kind":     ("Kind", lambda r, ctx: r.get("kind") or "—"),
+    "traits":   ("From the write-up", lambda r, ctx: trait_words(
+                    r.get("traits") or [], config.FACTS_TRAITS) or "—"),
     "points":   ("Pts", lambda r, ctx: f"{ctx['score'](r).points:g}"),
     "value":    ("Value", lambda r, ctx: (f"{ctx['score'](r).value:g}"
                                           if ctx["score"](r).value is not None else "—")),
@@ -601,10 +696,22 @@ def cmd_list(args) -> int:
 
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
     sep = config.COLUMN_GAP
+    table_width = sum(widths) + len(sep) * (len(widths) - 1)
     print(sep.join(h.ljust(w) for h, w in zip(headers, widths)))
-    print(config.RULE_CHAR * (sum(widths) + len(sep) * (len(widths) - 1)))
-    for row in rows:
+    print(config.RULE_CHAR * table_width)
+
+    # The facts line goes under its row rather than beside it because there is
+    # no width at which "soundproofed, historic building, private entrance"
+    # fits a column, and truncating it to one would throw away the trait that
+    # decided the stay. Off with `--no-facts`, or `facts = "off"` for good.
+    facts = config.FACTS_LINE and not getattr(args, "no_facts", False)
+    for rec, row in zip(stays, rows):
         print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
+        if facts and (line := describe_gleaned(rec)):
+            # Indented past the status glyph, so the rows still read as a
+            # column of names with notes hanging off them.
+            print(textwrap.fill(line, width=max(table_width, 60),
+                                initial_indent="    ↳ ", subsequent_indent="      "))
 
     footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
     return 0
@@ -644,6 +751,14 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate) -> None:
     if "unknown" in seen_tax:
         print(f"{config.TAX_MARKS.get('unknown', '')}  tax status unknown; shown "
               "as quoted. Mark it with `set <id> --incl-tax` or `--excl-tax`.")
+    if any(scoring.walked(r)[1] for r in stays):
+        print("\n" + textwrap.fill(
+            "≈  a walk the listing claims, not one we measured — the router had "
+            "no answer for that destination. Checked against the stay's own "
+            "coordinates, so nothing wildly wrong got in, but it is the seller's "
+            "figure. `walk --again` measures it properly; "
+            "`[maps] trust_claimed_walk = false` stops using them at all.",
+            width=76))
     if rate:
         print(f"{config.BASE_CURRENCY} converted at {rate} "
               f"{config.QUOTE_CURRENCY}/{config.BASE_CURRENCY}.")
@@ -722,6 +837,72 @@ def cmd_refresh(args) -> int:
             print(f"  {rec['name']}: {got}")
     save(stays)
     print(f"Refreshed {changed} of {len(stays)}.")
+    return 0
+
+
+def cmd_glean(args) -> int:
+    """Re-read every stay's write-up and file what it says.
+
+    Capture does this already, so this is for the stays that were captured
+    before it did — and for the day summary.py learns to read something new,
+    which is the same command either way.
+
+    Cheap enough to be worth just running: no network, no rate limit, nothing
+    to sign up for, a millisecond a stay. That is the whole difference between
+    this and `walk`, which is otherwise its twin — there is no reason to be
+    sparing with it, so `--again` isn't a flag here. Every run re-reads
+    everything and rewrites what the prose currently supports, which is also
+    how a fact drops off `gleaned` once a real scrape supplies it.
+    """
+    stays = load()
+    if args.id:
+        one = find(stays, args.id)
+        if not one:
+            print(f"No stay matching {args.id!r}", file=sys.stderr)
+            return 1
+        stays_to_read = [one]
+    else:
+        stays_to_read = stays
+
+    # Fitted from every stay we hold, not just the ones being re-read, so
+    # `glean <id>` judges that one against the same map as a whole-database run.
+    places, detour = summary.locate(stays)
+
+    read = nothing = 0
+    conflicts, doubted = [], []
+    for rec in stays_to_read:
+        if not (rec.get("summary") or "").strip():
+            nothing += 1
+            continue
+        verdict = summary.apply(rec, places, detour)
+        if verdict.conflicts:
+            conflicts.append((rec, verdict))
+        doubted += [(rec, c) for c in verdict.doubted]
+        if verdict.anything():
+            read += 1
+            print(f"  {rec.get('name') or '?'}: {describe_gleaned(rec, verdict)}")
+    save(stays)
+
+    print(f"\nRead {read} write-up{'s' if read != 1 else ''}.", end="")
+    if nothing:
+        print(f" {nothing} stay{'s' if nothing != 1 else ''} haven't got one — "
+              f"paste it with `set <id> --summary '…'`.", end="")
+    print()
+    if conflicts:
+        # Loud, and never resolved on our own. Two sources disagreeing about how
+        # many bedrooms a place has is the most useful thing either of them said.
+        print("\nThe prose disagrees with the record on these. Nothing was "
+              "overwritten — check the listing and settle it with `set`:")
+        for rec, verdict in conflicts:
+            for name, (held, said) in verdict.conflicts.items():
+                print(f"  {rec.get('name') or '?'}: {name} is {held} on the "
+                      f"record, the write-up says {said}")
+    if doubted:
+        print("\nClaims thrown out as impossible against the stay's own "
+              "coordinates:")
+        for rec, claim in doubted:
+            print(f"  {rec.get('name') or '?'}: \"{claim.landmark} is "
+                  f"{claim.text}\" — {claim.doubted}")
     return 0
 
 
@@ -842,6 +1023,7 @@ def cmd_paste(args) -> int:
     # previous capture still counts as a price.
     if rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    glean(rec, stays)
     measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
@@ -1014,7 +1196,16 @@ def describe(rec: dict, rate: float | None = None) -> str:
     # as a double behind a door and only one of those settles an argument.
     row("Beds", sources.describe_beds(rec.get("beds")))
     row("Has", ", ".join(rec.get("amenities") or []))
+    row("Kind", rec.get("kind"))
+    # In full here, not the handful the table has room for — `show` is where you
+    # go when the row didn't settle it.
+    row("Says", trait_words(rec.get("traits") or []))
     row("Walk", proximity.describe(rec))
+    if claimed := rec.get("walk_claimed"):
+        row("", "the listing claims " + ", ".join(
+            f"{m} min to {place}" for place, m in claimed.items()))
+    if gleaned := rec.get("gleaned"):
+        row("", f"{', '.join(gleaned)} read out of the write-up, not the page")
     if rec.get("score"):
         n = f" from {rec['reviews']} reviews" if rec.get("reviews") else ""
         pct = scoring.guest_score(rec)
@@ -1333,6 +1524,7 @@ def capture_entry(kind: str, payload, total: float | None,
         apply_total(rec, total, currency)
     elif rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    glean(rec, stays)
     measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
@@ -1571,6 +1763,8 @@ def main() -> int:
     l.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT)
     l.add_argument("--viable", action="store_true",
                    help="hide stays that fail a must-have in [filters]")
+    l.add_argument("--no-facts", action="store_true",
+                   help="drop the line under each stay summarising its write-up")
     l.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
                    metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                    help=f"convert {config.BASE_CURRENCY} prices to "
@@ -1587,6 +1781,10 @@ def main() -> int:
                     help="re-measure stays already done, e.g. after editing "
                          "the destinations")
     wk.set_defaults(func=cmd_walk)
+
+    gl = sub.add_parser("glean", help="re-read the write-ups and file what they say")
+    gl.add_argument("id", nargs="?")
+    gl.set_defaults(func=cmd_glean)
 
     pa = sub.add_parser("paste", help="accept a record from the browser bookmarklet")
     pa.add_argument("json", nargs="?", help="JSON payload (or pipe it on stdin)")

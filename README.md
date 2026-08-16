@@ -159,9 +159,10 @@ $ python3 lodgingbuddy.py list
 | *(none)* | hold a prompt open for pasted links |
 | `add <url>` | capture a stay from a URL |
 | `set <id> --price N …` | fill in or correct a field |
-| `list [--sort K] [--viable]` | everything side by side |
+| `list [--sort K] [--viable] [--no-facts]` | everything side by side |
 | `show <id> [--json]` | one stay in full, with the arithmetic shown |
 | `walk [id] [--again]` | re-measure the walk to your destinations — capture already does it once *(makes a network call — see [What reaches the internet](#what-reaches-the-internet))* |
+| `glean [id]` | re-read the listings' own write-ups and file what they say — capture already does it once *(no network, see [What the write-up says](#what-the-write-up-says))* |
 | `refresh [id]` | re-fetch prices |
 | `paste [json]` | take a record from the bookmarklet |
 | `rm <id>…` | drop stays you've ruled out |
@@ -429,6 +430,63 @@ marked `?` and held back rather than ruled out, which is not the same claim:
 
 ?  can't tell whether it clears a must-have — held back rather than ruled out:
      Harbour View — unknown: a room each for 2 shares
+```
+
+## What the write-up says
+
+Every listing arrives with a paragraph of prose and a row of structured fields
+half of which are null. Across the thirty Edinburgh stays, the summary was there
+30 times out of 30; a bathroom count 4 times, an address never. The facts were
+not missing. "The apartment features two bedrooms and two bathrooms" was sitting
+in the prose, in a shape nothing could sort by.
+
+So capture reads it, and files what it finds in the same fields as anything
+scraped off the page — because it is the same claim by the same seller, and
+which part of the page it was printed on is not a reason to believe it less.
+`glean` re-reads everything, for the stays captured before this existed. It
+makes no network call and costs about a millisecond a stay.
+
+On that set it recovered 13 bathroom counts, 122 amenities the structured
+capture missed, what kind of place each one is, and 36 further facts nothing
+else holds — `soundproofed`, `ground_floor`, `adults_only`, `visitor_levy`.
+Bedrooms agreed with the scraped field 9 times out of 9.
+
+It fills holes and never overwrites. Where the prose and the record disagree,
+`glean` says so and changes nothing — two sources disagreeing about how many
+bedrooms a place has is the most useful thing either of them said.
+
+Anything it reads can be weighted in `[scoring.bonuses]` exactly like an
+amenity, negative points included:
+
+```toml
+soundproofed = 4     # three nights on the Royal Mile with the windows shut
+free_parking = 3
+visitor_levy = -3    # Edinburgh charges this on top, from July 2026
+```
+
+And it reads the distances. "Edinburgh Castle is an 8-minute walk away" is a
+walk time nobody had to ask a routing service for, which took the Edinburgh
+stays with a walk figure from 10 of 30 to 22 — marked `≈` in the table, so a
+claimed figure never passes as a measured one, and never replacing one that was
+measured. Turn it off with `[maps] trust_claimed_walk = false`.
+
+What keeps that honest is that the claims get checked against the stay's own
+coordinates. Some of them are simply wrong: one aparthotel puts Edinburgh Castle
+a 1-minute walk from a building 1.25 km away, and nothing in the sentence marks
+it as different from the true ones. The landmarks to check against are worked
+out from the stays themselves — thirty properties at known points each quoting
+their distance to the castle are thirty circles that cross where the castle is —
+so this needs no gazetteer and works the same in Bordeaux. It fits the museum to
+within 81 m from prose alone. It is a blunt instrument by design: it throws out
+claims wrong by a factor of three, and forgives everything else.
+
+Under each row `list` prints a line summarising all of it. `--no-facts` drops it
+for one run, `[display] facts = "off"` for good, and there are `kind` and
+`traits` columns if you would rather keep the table one row per stay.
+
+```
+   Calton Hill Apartment    1br 1ba  3  ≈7m  605 GBP=  101  90%  77  19.1
+    ↳ apartment · private bathroom, bath, hairdryer · from the prose: bathrooms, kind
 ```
 
 ## How far is it, really

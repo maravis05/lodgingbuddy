@@ -55,9 +55,9 @@ label = "share"
 default_sort = "value"
 # Which columns `list` prints, and in what order. Pick from: name, source,
 # where, checkin, nts, slp, space, all_in, share_nt, score, reviews, clean,
-# look, walk, points, value. All of them at once is wider than a terminal, and
-# which ones earn their place changes with the trip — `where` and `checkin`
-# say nothing when every stay is the same town on the same dates.
+# look, walk, kind, traits, points, value. All of them at once is wider than a
+# terminal, and which ones earn their place changes with the trip — `where` and
+# `checkin` say nothing when every stay is the same town on the same dates.
 columns = ["name", "source", "space", "slp", "walk", "all_in", "share_nt",
            "score", "points", "value"]
 # Between columns, and the rule under the header.
@@ -67,6 +67,22 @@ rule_char = "─"
 name_width = 30
 source_width = 11
 where_width = 20
+
+# What the listing's own write-up said, under each row: what kind of place it
+# is, the facts summary.py could read out of the prose, and which of the columns
+# above are filled from it rather than from the page's markup.
+#
+# "line" is a second, indented line per stay; "off" leaves the table one row
+# each. There are `kind` and `traits` columns above for the middle ground, and
+# `list --no-facts` turns the line off for one run. It's a line rather than a
+# column because there is no width at which "soundproofed, historic building,
+# private entrance" fits one, and the trait that decides a stay is exactly the
+# one a truncated column would drop.
+facts = "line"
+# How many traits the line and the `traits` column will show before "+3". The
+# order isn't alphabetical — it's most-likely-to-change-your-mind first, which
+# is TRAIT_ORDER in lodgingbuddy.py.
+facts_traits = 6
 
 # Leading glyph per record status.
 [display.status_marks]
@@ -193,6 +209,18 @@ steps = [
 
 # Flat points for a fact being true. Amenity names are the canonical slugs in
 # sources.py's AMENITY_ALIASES; `second_bathroom` reads the bathroom count.
+#
+# Anything summary.py can read out of a write-up may be named here too — the
+# trait slugs in its `_TRAITS`, and the four property kinds — and they score
+# exactly like an amenity does. A fact's worth doesn't depend on which part of
+# the page it was printed on, and the write-up is where most of them are: of
+# the thirty Edinburgh stays, four had a bathroom count in the structured data
+# and seventeen said it in a sentence.
+#
+# Points may be negative. Some of what the prose gives you is a warning.
+#
+# A name nothing produces is caught at startup rather than scoring a silent
+# zero, so a typo here reads as a typo.
 [scoring.bonuses]
 parking = 6
 kitchen = 5
@@ -201,6 +229,31 @@ wifi = 4
 hot_tub = 4
 washing_machine = 3
 fireplace = 3
+
+# Read out of the write-up.
+# Three nights on the Royal Mile with the windows shut is the difference
+# between a good stay and no sleep, and nothing but the prose ever mentions it.
+soundproofed = 4
+# Above `parking`, not instead of it — a place with free parking scores both,
+# which is the intent. `paid_parking` and `limited_parking` are separate slugs
+# if you'd rather grade them.
+free_parking = 3
+# A quiet building. Only says nobody else's children, not that yours are barred.
+adults_only = 2
+lift = 2
+self_check_in = 2
+# Edinburgh's council charges this on top of the quoted price from July 2026,
+# so a stay that mentions it is a stay whose bill is higher than the table says.
+visitor_levy = -3
+limited_parking = -2
+# Others summary.py knows, unweighted here because they'd all fire at once on a
+# city flat and a bonus everything earns is a bonus nobody earns: historic_
+# building, renovated, private_entrance, private_bathroom, bathtub, sofa_bed,
+# ground_floor, upper_floor, family_rooms, reception_24h, concierge,
+# luggage_storage, laundry_service, restaurant_on_site, gym, sauna, bike_parking,
+# paid_parking, microwave, coffee_machine, kettle, dining_area, city_view,
+# garden_view, streaming, hairdryer, toiletries, wardrobe, work_desk, licensed.
+# And the kinds: apartment, aparthotel, hotel, guesthouse.
 
 
 # ── Must-haves ────────────────────────────────────────────────────────────
@@ -262,6 +315,22 @@ enabled = true
 # a destination. Set false to go back to measuring in one batch by hand, which
 # is the same number of calls made all at once instead.
 on_capture = true
+
+# Where the router has no figure for a destination, fall back to the walk the
+# listing itself claims to it — "Edinburgh Waverley station is a 6-minute walk".
+# Marked "≈" in the table, so a claimed figure never passes as a measured one.
+#
+# Worth having on because the alternative is a hole, and a stay with no walk
+# scores nothing for its location and sinks to the bottom looking remote. On the
+# Edinburgh set it takes the stays with a walk figure from 10 of 30 to 22, and
+# costs nothing — the numbers are already on the record, and no request goes out.
+#
+# It is the seller's number. What keeps it honest is summary.py checking each
+# claim against the stay's own coordinates and throwing out the impossible ones;
+# it caught an aparthotel claiming Edinburgh Castle was a 1-minute walk from a
+# building 1.25 km away. A measured figure is never replaced by a claimed one.
+# False keeps the walk column strictly to what was measured.
+trust_claimed_walk = true
 
 # Who to ask. "osrm" routes over OpenStreetMap and needs no key or account;
 # "google" is the Distance Matrix and needs both.
