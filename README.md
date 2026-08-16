@@ -60,9 +60,12 @@ reason about:
   front of you and writes to your clipboard.
 - `walk` sends each stay's location and your destination list to a routing
   service — OpenStreetMap's by default, Google's if you switch `provider`.
-  **This one is on out of the box**, and it's the only command that tells a
+  **This one is on out of the box**, and it's the only thing here that tells a
   third party which properties you're weighing up. Set `enabled = false` under
   `[maps]` in `config.toml` and no lookup ever leaves the machine.
+- **Capturing a stay does that same lookup for it**, once, as it lands — so a
+  paste is a routing call too, not only a call to the listing site. Same switch
+  turns it off, and `on_capture = false` turns off just this half of it.
 - Everything else — `list`, `show`, `set`, `points`, `value`, `db`, `rm` — is
   arithmetic on the file on your disk, and works with no connection at all.
 
@@ -158,7 +161,7 @@ $ python3 lodgingbuddy.py list
 | `set <id> --price N …` | fill in or correct a field |
 | `list [--sort K] [--viable]` | everything side by side |
 | `show <id> [--json]` | one stay in full, with the arithmetic shown |
-| `walk [id] [--again]` | measure the walk to your destinations *(makes a network call — see [What reaches the internet](#what-reaches-the-internet))* |
+| `walk [id] [--again]` | re-measure the walk to your destinations — capture already does it once *(makes a network call — see [What reaches the internet](#what-reaches-the-internet))* |
 | `refresh [id]` | re-fetch prices |
 | `paste [json]` | take a record from the bookmarklet |
 | `rm <id>…` | drop stays you've ruled out |
@@ -445,12 +448,34 @@ basket like that measures one thing while looking like it measures several. What
 these two measure is the walk into the Old Town, which for a three-night city
 stay is the question.
 
-**This one makes a network call, and it's on out of the box.** `walk` is the
-only command that tells anyone where the places you're considering are: it sends
-each stay's coordinates or address, along with your destination list, to a
-routing service. Nothing else here does that. It ships on because the default
-provider costs nothing and needs no key, and because how long the walk into town
-is decides more stays than the price does.
+**Stays are measured as they're captured**, so `walk` is a repair tool rather
+than a step you have to remember. One routing call and about half a second per
+new stay, and the row arrives with nothing missing from it — which is the whole
+point, since a row with a hole in it is a row you can't compare against the ones
+either side of it.
+
+```console
+stays> {"source":"booking.com","name":"Cowgate Test Flat",...}
+  Cowgate Test Flat [booking.com] · 3 nts · 4m walk · 640 GBP= all-in · 107/share/nt
+```
+
+Only ever on a stay that hasn't been measured, so re-capturing a price costs
+nothing, and only on one that carries a map pin or an address the page actually
+stated. `walk`'s own last resort is to geocode the property's *name*, which is
+a fair offer when you asked for it and can read what came back — but Nominatim
+answers "Harbour View" with *a* Harbour View, and the one it picks may be in
+Cornwall. Asked for somewhere that doesn't exist it returned a 22,016-minute
+walk, which is fifteen days and the honest version of the same mistake. A guess
+like that is fine to make when you're watching and wrong to make silently, since
+it arrives as a plausible number in a column you compare on. `on_capture =
+false` under `[maps]` goes back to measuring in one batch by hand.
+
+**This makes a network call, and it's on out of the box.** It is the only thing
+here that tells anyone where the places you're considering are: it sends each
+stay's coordinates or address, along with your destination list, to a routing
+service. Nothing else does that. It ships on because the default provider costs
+nothing and needs no key, and because how long the walk into town is decides
+more stays than the price does.
 
 ```console
 $ python3 lodgingbuddy.py walk

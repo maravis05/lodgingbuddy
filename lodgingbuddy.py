@@ -307,6 +307,52 @@ def ruled_out(rec: dict) -> list[tuple[str, str]]:
     return scoring.gates(rec)
 
 
+def measure_walk(rec: dict) -> None:
+    """Walk a stay to your destinations as it's captured, in place.
+
+    The lookup was always going to happen. Leaving it to `walk` meant a second
+    command to remember and a column that stayed empty until you did — and a
+    row with a hole in it is a row you can't compare, which is the one thing
+    this table is for. Half a second at capture buys a finished row.
+
+    Only ever on a stay that hasn't got one, so re-capturing a price doesn't
+    spend somebody else's routing service on an answer we already hold. Moving
+    a destination is still `walk --again`.
+
+    Every way this can go wrong is quiet, and deliberately so. A router that's
+    down, a stay whose page gave no coordinates, a destination list belonging
+    to the other leg — none of them is a reason for the capture not to have
+    happened, and every one of them leaves a stay that `walk` can pick up
+    later. The one thing it must never do is lose you the record.
+    """
+    if rec.get("walk_minutes") or not config.MAPS_ON_CAPTURE:
+        return
+    try:
+        proximity.check_enabled()
+    except proximity.Disabled:
+        return
+    # A map pin or an address the page actually stated, and nothing weaker.
+    # `origin_of` will fall back to the property's name, which is a fair last
+    # resort when you typed `walk` and can read what came back — but Nominatim
+    # answers "Harbour View" with *a* Harbour View, and the one it picks may be
+    # in Cornwall. That guess is fine to offer and wrong to make silently: it
+    # arrives as a plausible number in a column you compare on. Asked for
+    # "Nowhere In Particular" it returned a 22,016-minute walk, which is
+    # fifteen days and the honest version of the same mistake.
+    located = rec.get("address") or (rec.get("latitude") is not None
+                                     and rec.get("longitude") is not None)
+    wanted = config.destinations_for(database.current())
+    if not wanted or not located:
+        return
+    origin = proximity.origin_of(rec)
+    try:
+        minutes, _ = proximity.walk_times(origin, wanted)
+    except (proximity.MapsError, proximity.NoKey, proximity.Unlocatable, OSError):
+        return
+    if minutes:
+        rec["walk_minutes"] = minutes
+
+
 def weekday(iso: str | None) -> str:
     if not iso:
         return ""
@@ -344,6 +390,7 @@ def cmd_add(args) -> int:
     # previous capture still counts as a price.
     if rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
     save(stays)
@@ -361,6 +408,8 @@ def cmd_add(args) -> int:
     shape = [s for s in shape if s]
     if shape:
         print("  " + ", ".join(shape))
+    if walk := proximity.describe(rec):
+        print(f"  {walk}")
     if rec["score"]:
         n = f" from {rec['reviews']} reviews" if rec["reviews"] else ""
         print(f"  scored {rec['score']}{n}")
@@ -793,11 +842,14 @@ def cmd_paste(args) -> int:
     # previous capture still counts as a price.
     if rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
     save(stays)
 
     print(f"{rec['name'] or '?'}  [{rec['source']}]")
+    if walk := proximity.describe(rec):
+        print(f"  {walk}")
     if rec["price"]:
         print(f"  {rec['price']:g} {rec['currency'] or ''}".rstrip())
         if rec.get("price_basis") == "indicative":
@@ -1191,6 +1243,11 @@ def confirm(rec: dict, candidates: list, rate: float | None) -> str:
     bits = [f"{rec.get('name') or '?'} [{rec.get('source')}]"]
     if rec.get("nights"):
         bits.append(f"{rec['nights']} nts")
+    # The walk, in the one figure the tier scores, rather than every
+    # destination — the line is a receipt for the paste, not a report, and
+    # `show` breaks it out. Rounded the way the column rounds it.
+    if (mins := scoring.walk_minutes(rec)) is not None:
+        bits.append(f"{mins:.0f}m walk")
     if amount:
         bits.append(f"{from_mark(rec, tax)}{amount:,.0f} {cur}".strip()
                     + config.TAX_MARKS.get(tax, "") + " all-in")
@@ -1276,6 +1333,7 @@ def capture_entry(kind: str, payload, total: float | None,
         apply_total(rec, total, currency)
     elif rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
+    measure_walk(rec)
     stays = [s for s in stays if key_of(s) != key_of(rec)]
     stays.append(rec)
     save(stays)

@@ -112,6 +112,9 @@ DEFAULTS = {
         # sign up for, and a walk time is most of what decides a stay. Set this
         # false and the tool never opens a connection to a routing service.
         "enabled": True,
+        # Measure a stay as it's captured, so a row arrives finished. Costs
+        # about half a second and one routing call per new stay.
+        "on_capture": True,
         # "osrm" walks OpenStreetMap data and needs no key. "google" is the
         # Distance Matrix and does.
         "provider": "osrm",
@@ -241,6 +244,7 @@ REQUIRED_AMENITIES = CONFIG["filters"]["require"]
 
 # proximity
 MAPS_ENABLED = CONFIG["maps"]["enabled"]
+MAPS_ON_CAPTURE = CONFIG["maps"]["on_capture"]
 MAPS_PROVIDER = CONFIG["maps"]["provider"]
 MAPS_USER_AGENT = CONFIG["maps"]["user_agent"]
 OSRM_HOST = CONFIG["maps"]["osrm_host"]

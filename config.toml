@@ -254,6 +254,15 @@ require = []
 # were visiting anyway.)
 enabled = true
 
+# Measure each stay as it's captured, rather than waiting for `walk`. One
+# routing call and about half a second per new stay, and the row arrives with
+# nothing missing from it — which is the point, since a row with a hole in it
+# is a row you can't compare. Only ever on a stay that hasn't been measured, so
+# re-capturing a price costs nothing; `walk --again` re-measures after you move
+# a destination. Set false to go back to measuring in one batch by hand, which
+# is the same number of calls made all at once instead.
+on_capture = true
+
 # Who to ask. "osrm" routes over OpenStreetMap and needs no key or account;
 # "google" is the Distance Matrix and needs both.
 provider = "osrm"
