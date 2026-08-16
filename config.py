@@ -231,13 +231,31 @@ def _merge(base: dict, over: dict) -> dict:
 
 
 
+def _text(path: Path) -> str:
+    """A settings file as text, said in the one encoding these files are in.
+
+    Every read and every write here names UTF-8 rather than taking the one the
+    platform prefers, because TOML is UTF-8 by definition and the platform is
+    not: a file this tool writes on Windows and reads on Windows would
+    otherwise be written in the local code page and rejected by its own parser
+    the moment a comment held an em dash.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        # Left over from a version that wrote in the code page, or saved by an
+        # editor that did. Worth naming, because on its own the decoder offers
+        # a byte and an offset and nothing you can act on.
+        sys.exit(f"Can't read {path}: it isn't UTF-8 — {exc}. Re-save it as "
+                 f"UTF-8, or delete it and let the tool start it again.")
+
+
 def _read(path: Path) -> dict:
     """One TOML file, or nothing where there isn't one."""
     if not path.exists():
         return {}
     try:
-        with path.open("rb") as fh:
-            return tomllib.load(fh)
+        return tomllib.loads(_text(path))
     except (tomllib.TOMLDecodeError, OSError) as exc:
         # Bad settings should read as bad settings, not as a stack trace out of
         # whichever command happened to import this first.
@@ -555,7 +573,9 @@ def start_city(city: str) -> Path:
     path = city_path(city)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_text(CITY_TEMPLATE.format(title=path.stem.replace("-", " ").title()))
+        path.write_text(
+            CITY_TEMPLATE.format(title=path.stem.replace("-", " ").title()),
+            encoding="utf-8")
     return path
 
 
@@ -575,17 +595,17 @@ def set_city(db: str, city: str) -> Path:
             f"# {db} — this database's own settings, over cities/{city}.toml and\n"
             f"# {PATH.name}. What belongs here is what's true of this trip rather\n"
             f"# than of the city: how many ways the bill splits, a must-have that\n"
-            f"# only matters this time.\n\n{line}\n")
+            f"# only matters this time.\n\n{line}\n", encoding="utf-8")
         return path
 
-    text = path.read_text()
+    text = _text(path)
     # A bare key has to come before the first table header or it belongs to that
     # table, so a file that hasn't got one takes it at the top.
     if re.search(r"^\s*city\s*=.*$", text, re.M):
         text = re.sub(r"^\s*city\s*=.*$", line, text, count=1, flags=re.M)
     else:
         text = line + "\n" + text
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path
 
 

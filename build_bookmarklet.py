@@ -172,7 +172,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print(f"source   {len(SRC.read_text()):>7,} bytes")
+    print(f"source   {len(SRC.read_text(encoding='utf-8')):>7,} bytes")
     print(f"stripped {len(code):>7,} bytes")
     print(f"encoded  {len(url):>7,} bytes")
     if len(url) > config.BOOKMARKLET_MAX_BYTES:

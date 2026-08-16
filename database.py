@@ -66,7 +66,7 @@ def forced() -> str | None:
 
 def _pointed() -> str | None:
     try:
-        return POINTER.read_text().strip() or None
+        return POINTER.read_text(encoding="utf-8").strip() or None
     except OSError:
         return None
 
@@ -115,15 +115,15 @@ def names() -> list[str]:
 def count(name: str) -> int | None:
     """How many stays are in one, or None if it can't be read."""
     try:
-        return len(json.loads(path_of(name).read_text()))
-    except (OSError, json.JSONDecodeError, TypeError):
+        return len(json.loads(path_of(name).read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
         return None
 
 
 def use(name: str) -> str:
     """Work in `name` from here on."""
     name = name_of(name)
-    POINTER.write_text(name + "\n")
+    POINTER.write_text(name + "\n", encoding="utf-8")
     return name
 
 
@@ -138,5 +138,5 @@ def start(name: str) -> str:
     target = path_of(name)
     if target.exists():
         raise ValueError(f"{name} already exists — `db {name}` switches to it.")
-    target.write_text("[]\n")
+    target.write_text("[]\n", encoding="utf-8")
     return name

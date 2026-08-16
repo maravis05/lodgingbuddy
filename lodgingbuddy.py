@@ -68,11 +68,12 @@ def load() -> list[dict]:
     path = database.path()
     if not path.exists():
         return []
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save(stays: list[dict]) -> None:
-    database.path().write_text(json.dumps(stays, indent=2) + "\n")
+    database.path().write_text(json.dumps(stays, indent=2) + "\n",
+                               encoding="utf-8")
 
 
 def key_of(rec: dict) -> str:
