@@ -249,7 +249,11 @@ def complaints() -> list[str]:
     known_bonuses = (set(sources.AMENITY_ALIASES) | set(summary.TRAITS)
                      | set(summary.NEARBY) | set(summary.KINDS)
                      | {"second_bathroom"})
-    out = []
+    # Whatever loading the settings turned up — a landmark that won't compile, a
+    # city file trying to move the store. Collected there because config.py is
+    # imported before there is anything to print with, and reported here because
+    # this is where settings problems are already read out.
+    out = list(config.PROBLEMS)
     # Not a settings problem but a code one, and this is the only place that
     # sees both lists. summary.py fills `amenities` using its own patterns; if
     # it learns a slug sources.py has never heard of, that slug silently can't

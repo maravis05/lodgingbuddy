@@ -1,0 +1,184 @@
+# Edinburgh — the settings for the `edinbruh` database, merged over config.toml
+# whenever that database is the one in use. Anything config.toml holds can be
+# set here; what's here is what's true of the city rather than of the tool.
+
+
+# ── Where you want to be ──────────────────────────────────────────────────
+#
+# Two destinations rather than three, because the third would have been Princes
+# Street and it is 300 m from both of these — a basket of places that close
+# measures one thing while looking like it measures several. What it measures is
+# the walk into the Old Town, which for a three-night city stay is the question.
+#
+# Coordinates rather than addresses: both are pedestrianised stretches Nominatim
+# resolves to one end or the other.
+
+[[destination]]
+label = "Royal Mile"
+# St Giles', the middle of the Mile rather than either end of it.
+latitude = 55.9495
+longitude = -3.1906
+weight = 0.6
+
+[[destination]]
+label = "Edinburgh Waverley"
+latitude = 55.9520
+longitude = -3.1892
+weight = 0.4
+
+
+# ── What the write-ups name ───────────────────────────────────────────────
+#
+# summary.py reads a distance out of a sentence only for places listed here, so
+# this table is the difference between "Edinburgh Waverley station is a 6-minute
+# walk" being a fact on the record and being a sentence nobody read.
+#
+# `name` is what gets stored and what a [[destination]] label is matched against
+# — "Waverley" answers to "Edinburgh Waverley". `match` is every way the corpus
+# spells it, and is worth writing out: Booking is inconsistent about "Edinburgh
+# Waverley", "Waverley Station" and "Edinburgh Railway Station" inside a single
+# capture, and about the American spellings it gives Centre and Theatre. Leave
+# `match` off and the name itself becomes the pattern, article-tolerant and
+# whitespace-flexible, which covers the ordinary case and nothing else.
+#
+# Order matters: the first entry that matches a phrase names it, so anything
+# that is a prefix of another entry goes second.
+#
+# `latitude`/`longitude` are optional and are what a claim gets checked against
+# — the write-ups here include an aparthotel putting Edinburgh Castle a
+# 1-minute walk from a building 1.25 km away. Give them for anywhere you know;
+# summary.locate() fits the rest out of the corpus once four stays have quoted a
+# distance to it, which is right to a few hundred metres and enough to catch an
+# order-of-magnitude lie, but a looked-up coordinate is better and works on the
+# first stay.
+#
+# Give them only for places that are a point. Princes Street, George Street, the
+# Royal Mile, the Meadows and the University have none here on purpose: a
+# kilometre of street pinned at its midpoint makes an honest "2 minutes from
+# Princes Street" measure 526 m and reads as a lie. Fitting handles those
+# properly, because what it fits is the point that best explains the claims
+# themselves — which for a long street is the stretch people mean.
+#
+# Coordinates below were written from knowledge rather than looked up. They are
+# well inside the tolerance the check uses, but they are worth spot-checking
+# against a map before you trust one to throw a claim out.
+
+[[landmark]]
+name = "Edinburgh Castle"
+match = "Edinburgh\\s+Castle"
+latitude = 55.9486
+longitude = -3.1999
+
+[[landmark]]
+name = "Waverley"
+match = "(?:Edinburgh\\s+)?Waverley(?:\\s+(?:Railway\\s+)?[Ss]tation)?|Edinburgh\\s+Rail(?:way)?\\s+Station"
+latitude = 55.9521
+longitude = -3.1897
+
+[[landmark]]
+name = "Royal Mile"
+match = "(?:the\\s+)?Royal\\s+Mile"
+
+[[landmark]]
+name = "National Museum of Scotland"
+match = "(?:the\\s+)?National\\s+Museum\\s+of\\s+Scotland"
+latitude = 55.9470
+longitude = -3.1900
+
+[[landmark]]
+name = "Edinburgh Playhouse"
+match = "Edinburgh\\s+Playhouse"
+latitude = 55.9573
+longitude = -3.1846
+
+[[landmark]]
+name = "Edinburgh Airport"
+match = "Edinburgh\\s+(?:International\\s+)?Airport"
+latitude = 55.9500
+longitude = -3.3725
+
+[[landmark]]
+name = "EICC"
+match = "Edinburgh\\s+International\\s+Conference\\s+Cent(?:er|re)|EICC"
+latitude = 55.9459
+longitude = -3.2059
+
+[[landmark]]
+name = "Arthur's Seat"
+match = "Arthur[’']?s?\\s+Seat"
+
+[[landmark]]
+name = "Murrayfield"
+match = "Murrayfield(?:\\s+Stadium)?"
+latitude = 55.9422
+longitude = -3.2409
+
+[[landmark]]
+name = "Royal Yacht Britannia"
+match = "(?:the\\s+)?Royal\\s+Yacht\\s+Britannia"
+latitude = 55.9820
+longitude = -3.1762
+
+[[landmark]]
+name = "Camera Obscura"
+match = "Camera\\s+Obscura(?:\\s+and\\s+World\\s+of\\s+Illusions)?"
+latitude = 55.9487
+longitude = -3.1955
+
+[[landmark]]
+name = "Princes Street"
+match = "Prince?s+[’']?s?\\s+Street|Princes\\s+St\\b"
+
+[[landmark]]
+name = "Mary King's Close"
+match = "(?:The\\s+)?Real\\s+Mary\\s+King[’']s\\s+Close"
+latitude = 55.9497
+longitude = -3.1901
+
+[[landmark]]
+name = "Grassmarket"
+match = "(?:the\\s+)?Grassmarket"
+latitude = 55.9475
+longitude = -3.1962
+
+[[landmark]]
+name = "Usher Hall"
+match = "Usher\\s+Hall"
+latitude = 55.9470
+longitude = -3.2050
+
+[[landmark]]
+name = "Edinburgh Zoo"
+match = "Edinburgh\\s+Zoo"
+latitude = 55.9425
+longitude = -3.2686
+
+[[landmark]]
+name = "Royal Botanic Garden"
+match = "(?:the\\s+)?Royal\\s+Botanic\\s+Gardens?"
+latitude = 55.9652
+longitude = -3.2094
+
+[[landmark]]
+name = "St Giles Cathedral"
+match = "St\\s+Giles[’']?\\s*Cathedral"
+latitude = 55.9495
+longitude = -3.1906
+
+[[landmark]]
+name = "The Meadows"
+match = "(?:the\\s+)?Meadows"
+
+[[landmark]]
+name = "University of Edinburgh"
+match = "(?:The\\s+)?University\\s+of\\s+Edinburgh"
+
+[[landmark]]
+name = "George Street"
+match = "George\\s+Street"
+
+[[landmark]]
+name = "Holyrood"
+match = "(?:the\\s+)?Palace\\s+of\\s+Holyrood\\s*[Hh]ouse|Holyrood"
+latitude = 55.9527
+longitude = -3.1723

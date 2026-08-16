@@ -1,0 +1,37 @@
+# Oban — the settings for the `stays` database, merged over config.toml whenever
+# that database is the one in use.
+
+
+# ── Where you want to be ──────────────────────────────────────────────────
+#
+# `address` is geocoded on first use and the answer reused for the rest of the
+# run. Giving `latitude`/`longitude` instead skips that entirely, which is worth
+# doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
+# beach. Coordinates win where both are present.
+
+[[destination]]
+label = "Oban town centre"
+address = "George Street, Oban PA34 5NX, UK"
+weight = 0.6
+
+[[destination]]
+label = "Ferry terminal"
+# The postal address doesn't geocode — Nominatim has no "Railway Pier" in Oban
+# and returns nothing at all for it. The pin does.
+latitude = 56.4117438
+longitude = -5.4766190
+weight = 0.25
+
+[[destination]]
+label = "Oban Distillery"
+address = "Oban Distillery, Stafford Street, Oban PA34 5NH, UK"
+weight = 0.15
+
+
+# ── What the write-ups name ───────────────────────────────────────────────
+#
+# Nothing yet. A landmark table is built by reading the write-ups you've already
+# captured and noticing which places they keep naming — `show <id>` prints the
+# prose in full — and the cottage sites say much less of this than Booking.com
+# does. See edinbruh.toml for the shape, and for what the optional coordinates
+# are worth.

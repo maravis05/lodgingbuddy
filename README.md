@@ -194,19 +194,25 @@ figure is never replaced.
 the structured fields are. It extracts property kind, bedroom and bathroom
 counts, amenity slugs, traits (`soundproofed`, `free_parking`, `visitor_levy`,
 `ground_floor`, …), neighbourhood facts (`food_nearby`, `transport_nearby`, …),
-and claimed walking times to named landmarks.
+and claimed walking times to the landmarks the active database's config names.
 
 It runs on every capture and on `set --summary`; `glean` re-runs it over
 stored records. It only fills holes — a scraped field always wins — and
 records what it filled in `gleaned`. Where the prose contradicts the record,
 nothing is overwritten and the disagreement is printed.
 
-Claimed distances are checked against geometry. `locate()` trilaterates each
-landmark's position from every stay that quotes a distance to it, fitting the
-pavement-to-straight-line ratio from the corpus itself, then rejects claims
-that are impossible by an order of magnitude. Nothing is looked up; point it at
-a different city's records and it fits that city. Upper bounds ("less than
-0.6 mi"), drives, and anything over an hour are excluded from the walk figures.
+Claimed distances are checked against geometry. A landmark given
+`latitude`/`longitude` in the config is checked against that. For the rest,
+`locate()` trilaterates a position from every stay that quotes a distance to
+the landmark, fitting the pavement-to-straight-line ratio from the corpus
+itself. Either way, claims impossible by an order of magnitude are rejected —
+in the bundled Edinburgh set, an aparthotel putting the castle a 1-minute walk
+from a building 1.25 km away. Upper bounds ("less than 0.6 mi"), drives, and
+anything over an hour are excluded from the walk figures.
+
+Give coordinates only for landmarks that are a point. A kilometre of street
+pinned at its midpoint makes an honest claim from one end of it measure wrong;
+fitting handles those better, because what it fits is the stretch people mean.
 
 ## Storage
 
@@ -214,7 +220,8 @@ Stays are a JSON list, one file per database, in the folder holding
 `storage.file`. `stays.json` is the database named `stays`; any other `*.json`
 beside it is another. `db <name>` switches and remembers the choice in
 `.lodgingbuddy-db`; `LODGINGBUDDY_DB` overrides it for one run without moving
-the pointer.
+the pointer. A database may also keep `<name>.toml` beside its `<name>.json` —
+see City configs below.
 
 The record schema is `sources.blank_record()` — identity, location, dates and
 party, price and tax, property shape and beds, amenities and traits, ratings
@@ -228,9 +235,11 @@ the script.
 
 ## Configuration
 
-`config.toml` overrides `config.DEFAULTS` section by section, so the tool runs
-with no config file and a file setting three keys overrides three keys. Tables
-merge key by key; lists (the sources, the destinations) replace wholesale.
+Three layers, each merged over the one before: `config.DEFAULTS` in `config.py`,
+then `config.toml`, then the active database's own `<name>.toml`. The tool runs
+with no config file at all, and a file setting three keys overrides three keys.
+Tables merge key by key; lists (sources, destinations, landmarks) replace
+wholesale.
 
 | Section | Holds |
 | --- | --- |
@@ -245,6 +254,7 @@ merge key by key; lists (the sources, the destinations) replace wholesale.
 | `[filters]` | The gates |
 | `[maps]` | Provider, hosts, whether any of it is enabled |
 | `[[destination]]` | `label`, plus `address` or `latitude`/`longitude`; optional `weight` and `db` |
+| `[[landmark]]` | `name`; optional `match` (regex for how write-ups spell it) and `latitude`/`longitude` |
 | `[[source]]` | `name`, `domain`, `parser`, `currency`, `tax_included`, `score_scale` |
 | `[bookmarklet]` | Build inputs and outputs |
 
@@ -252,11 +262,41 @@ Columns available to `display.columns`: `name`, `source`, `where`, `checkin`,
 `nts`, `slp`, `space`, `all_in`, `share_nt`, `score`, `reviews`, `clean`,
 `look`, `walk`, `kind`, `traits`, `points`, `value`.
 
+Settings that can never take effect — a tier naming a factor that doesn't
+exist, a bonus naming a slug nothing produces, a landmark whose `match` won't
+compile, `[storage]` in a city file — are reported on stderr and otherwise
+ignored.
+
+## City configs
+
+`edinbruh.toml` beside `edinbruh.json` is the settings for the `edinbruh`
+database, merged over `config.toml` whenever that database is in use. Anything
+`config.toml` holds can go in one; `[storage]` is the exception, since it is
+what says where the city files themselves live.
+
+This is where things that are true of a place rather than of the tool belong:
+which landmarks its write-ups name and how they spell them, the destinations
+worth measuring to, what tax is charged and in what currency, and any weights
+that read differently there (parking matters less in a city centre). Two trips
+in play at once are two files, and neither one's numbers move while you work on
+the other.
+
+Settings are rebound whenever `database.current()` resolves a different name,
+so `db edinbruh` at the prompt moves the landmarks, destinations and rates
+together, and `db` prints which file is in force. The older arrangement still
+works and needs no migrating: destinations in `config.toml` may carry
+`db = "<name>"`, and one that names none counts everywhere.
+
 ## Using it in another country
 
-Configurable without touching code: currency codes, tax rate, share split,
-destinations, scoring weights, gates, columns. OSRM and Nominatim cover the
-world.
+A new city is a new database and a `<name>.toml` beside it. Nothing in that
+needs code: currency codes, tax rate, share split, destinations, landmarks,
+scoring weights, gates, columns. OSRM and Nominatim cover the world.
+
+The landmark table is the part worth building deliberately. Capture a dozen
+listings first, read the write-ups (`show <id>` prints them in full), and write
+down the places they keep naming — that is what turns "8 minutes from the
+station" into a figure in the walk column. `edinbruh.toml` is a worked example.
 
 Needs code:
 
@@ -265,13 +305,10 @@ Needs code:
   entry naming its domain and parser. Another brand on an existing platform
   needs only the config entry. For bookmarklet support, add a host branch to
   `extract()` in `bookmarklet.js`.
-- **Landmarks.** `summary.LANDMARKS` is a hand-built list of Edinburgh names
-  and spellings. Replace it for another city; the trilateration and the
-  geometry check need no other change.
 - **Prose parsing.** `summary.py` matches English, and its distance patterns
-  cover the miles/feet/minutes forms Booking.com writes. Amenity and trait
-  slugs it emits must exist in `sources.AMENITY_ALIASES`, which
-  `scoring.complaints()` checks.
+  cover the miles/feet/minutes forms Booking.com writes. The trait, amenity and
+  neighbourhood vocabularies are hardcoded there; slugs it emits must exist in
+  `sources.AMENITY_ALIASES`, which `scoring.complaints()` checks.
 
 `display.tax_marks`, `[tax] vat_rate` and `tax_included` describe any
 inclusive/exclusive split, not VAT specifically; per-stay stated rates
@@ -287,8 +324,9 @@ summary.py            prose reader, landmark trilateration
 scoring.py            tiers, bonuses, value, gates
 proximity.py          walking times (OSRM / Google), geocoding
 database.py           which set of stays is active
-config.py             defaults, and the config.toml overlay
-config.toml           settings
+config.py             defaults, and the config.toml / <db>.toml overlays
+config.toml           settings every database shares
+<db>.toml             one database's own; edinbruh.toml is a worked example
 bookmarklet.js        in-page extractor
 build_bookmarklet.py  builds the three installable forms
 test_bookmarklet.js   unit checks for the extractor

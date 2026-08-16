@@ -43,13 +43,22 @@ walk to a point 1.25 km away is not a slow walker, it is a wrong sentence, and a
 order-of-magnitude test is enough to tell those apart while staying well clear of
 the honest gap between crow-flies and pavement.
 
-The landmarks come from the corpus rather than a gazetteer. Thirty stays with
-known coordinates all quoting their distance to Edinburgh Castle is thirty
-circles that intersect where the castle is, so `locate` trilaterates it: Waverley
-lands 112 m off, the museum 140 m, the castle 508 m, all from prose. It also
-explains its own failures usefully — the airport fits 3.7 km out because those
-figures are drives, not walks, and a landmark that won't converge is one whose
-claims were never comparable in the first place.
+Which places count as landmarks is a fact about a city, so the table is empty
+here and comes from the database's own settings — `[[landmark]]` in
+edinbruh.toml, installed by `use_landmarks`. A new city is a list of names and
+the spellings its write-ups use, and nothing in this file changes.
+
+Where those landmarks are can come from the corpus rather than a gazetteer.
+Thirty stays with known coordinates all quoting their distance to Edinburgh
+Castle is thirty circles that intersect where the castle is, so `locate`
+trilaterates it: Waverley lands 112 m off, the museum 140 m, the castle 508 m,
+all from prose. It also explains its own failures usefully — the airport fits
+3.7 km out because those figures are drives, not walks, and a landmark that
+won't converge is one whose claims were never comparable in the first place.
+A config that gives coordinates outright is believed instead, and should: it
+works on the first stay rather than the fourth. Give them only for places that
+are a point — a kilometre of street pinned at its midpoint turns an honest
+claim from one end of it into a lie.
 
 Two things deliberately not done. Sentiment isn't scored: "highly rated for its
 location" is the same review average already in the record, laundered into an
@@ -94,40 +103,32 @@ FURTHEST = 60
 # --------------------------------------------------------------------------
 # Landmarks
 #
-# The name on the left is what gets stored; the pattern on the right is every
-# way the corpus spells it. Booking is inconsistent about "Edinburgh Waverley",
+# Which places a write-up names, and how it spells them, is a fact about a city
+# and not about this tool — so the table is empty here and filled from the
+# database's own settings, `[[landmark]]` in edinbruh.toml. `use_landmarks`
+# below is what config.apply calls to install one.
+#
+# The name is what gets stored; `match` is every way the corpus spells it, and
+# is worth writing out. Booking is inconsistent about "Edinburgh Waverley",
 # "Waverley Station" and "Edinburgh Railway Station" within a single capture,
-# and about the American spellings it applies to Centre and Theatre.
+# and about the American spellings it applies to Centre and Theatre. A landmark
+# with no `match` gets a pattern built from its name, which handles the ordinary
+# case and nothing else.
+#
+# Order is load-bearing: `_canonical` takes the first entry that matches, so a
+# name that is a prefix of another goes second.
 # --------------------------------------------------------------------------
 
-LANDMARKS: list[tuple[str, str]] = [
-    ("Edinburgh Castle", r"Edinburgh\s+Castle"),
-    ("Waverley", r"(?:Edinburgh\s+)?Waverley(?:\s+(?:Railway\s+)?[Ss]tation)?"
-                 r"|Edinburgh\s+Rail(?:way)?\s+Station"),
-    ("Royal Mile", r"(?:the\s+)?Royal\s+Mile"),
-    ("National Museum of Scotland", r"(?:the\s+)?National\s+Museum\s+of\s+Scotland"),
-    ("Edinburgh Playhouse", r"Edinburgh\s+Playhouse"),
-    ("Edinburgh Airport", r"Edinburgh\s+(?:International\s+)?Airport"),
-    ("EICC", r"Edinburgh\s+International\s+Conference\s+Cent(?:er|re)|EICC"),
-    ("Arthur's Seat", r"Arthur[’']?s?\s+Seat"),
-    ("Murrayfield", r"Murrayfield(?:\s+Stadium)?"),
-    ("Royal Yacht Britannia", r"(?:the\s+)?Royal\s+Yacht\s+Britannia"),
-    ("Camera Obscura", r"Camera\s+Obscura(?:\s+and\s+World\s+of\s+Illusions)?"),
-    ("Princes Street", r"Prince?s+[’']?s?\s+Street|Princes\s+St\b"),
-    ("Mary King's Close", r"(?:The\s+)?Real\s+Mary\s+King[’']s\s+Close"),
-    ("Grassmarket", r"(?:the\s+)?Grassmarket"),
-    ("Usher Hall", r"Usher\s+Hall"),
-    ("Edinburgh Zoo", r"Edinburgh\s+Zoo"),
-    ("Royal Botanic Garden", r"(?:the\s+)?Royal\s+Botanic\s+Gardens?"),
-    ("St Giles Cathedral", r"St\s+Giles[’']?\s*Cathedral"),
-    ("The Meadows", r"(?:the\s+)?Meadows"),
-    ("University of Edinburgh", r"(?:The\s+)?University\s+of\s+Edinburgh"),
-    ("George Street", r"George\s+Street"),
-    ("Holyrood", r"(?:the\s+)?Palace\s+of\s+Holyrood\s*[Hh]ouse|Holyrood"),
-]
+LANDMARKS: list[tuple[str, str]] = []
 
-_LM_ANY = "|".join(f"(?:{p})" for _, p in LANDMARKS)
-_LM_ONE = [(n, re.compile(p, re.I)) for n, p in LANDMARKS]
+# Where the config said a landmark actually is. Optional, and worth giving for
+# anywhere you know: `locate` can fit a position out of enough write-ups, but a
+# coordinate you supplied works on the first stay rather than the fourth, and is
+# right rather than approximately right.
+PLACES: dict[str, tuple[float, float]] = {}
+
+_LM_ANY = ""
+_LM_ONE: list[tuple[str, re.Pattern]] = []
 
 # A distance, in any of the forms the corpus uses. One named group so the
 # templates below can each carry exactly one.
@@ -163,24 +164,89 @@ _DIST_LOOSE = _DIST.replace(
 _QUAL = r"(?P<q>just|only|within|less\s+than|under|about|around|roughly)?\s*"
 _LIMIT = re.compile(r"within|less\s+than|under", re.I)
 
-_TEMPLATES = [
-    ("landmark is distance",
-     rf"(?P<lm>{_LM_ANY})[^.,;]{{0,30}}?\s+(?:is|lies|are)\s+{_QUAL}(?:a\s+)?{_DIST}"),
-    ("landmark (distance)",
-     rf"(?P<lm>{_LM_ANY})\s*\({_QUAL}{_DIST}\)"),
-    ("distance from landmark",
-     rf"{_QUAL}{_DIST_LOOSE}\s+(?:away\s+)?(?:from|of|to)\s+(?:the\s+)?(?P<lm>{_LM_ANY})"),
-    # "Edinburgh Waverley station 1312 feet away" — no verb at all, which is
-    # Booking's house style for a list of two. Anchored on the trailing "away"
-    # so it can't swallow the next sentence's number.
-    ("landmark distance away",
-     rf"(?P<lm>{_LM_ANY})[^.,;]{{0,25}}?\s+{_QUAL}{_DIST}\s+(?:away|nearby)"),
-    ("distance landmark",
-     rf"{_QUAL}{_DIST}\s+(?:from|of)?\s*(?P<lm>{_LM_ANY})"),
-    ("landmark within distance",
-     rf"(?P<lm>{_LM_ANY})[^.]{{0,30}}?\s+(?P<q>within|less\s+than)\s+(?:a\s+)?{_DIST}"),
-]
-_TEMPLATES = [(n, re.compile(p, re.I)) for n, p in _TEMPLATES]
+def _shapes(lm: str) -> list[tuple[str, str]]:
+    return [
+        ("landmark is distance",
+         rf"(?P<lm>{lm})[^.,;]{{0,30}}?\s+(?:is|lies|are)\s+{_QUAL}(?:a\s+)?{_DIST}"),
+        ("landmark (distance)",
+         rf"(?P<lm>{lm})\s*\({_QUAL}{_DIST}\)"),
+        ("distance from landmark",
+         rf"{_QUAL}{_DIST_LOOSE}\s+(?:away\s+)?(?:from|of|to)\s+(?:the\s+)?(?P<lm>{lm})"),
+        # "Edinburgh Waverley station 1312 feet away" — no verb at all, which is
+        # Booking's house style for a list of two. Anchored on the trailing
+        # "away" so it can't swallow the next sentence's number.
+        ("landmark distance away",
+         rf"(?P<lm>{lm})[^.,;]{{0,25}}?\s+{_QUAL}{_DIST}\s+(?:away|nearby)"),
+        ("distance landmark",
+         rf"{_QUAL}{_DIST}\s+(?:from|of)?\s*(?P<lm>{lm})"),
+        ("landmark within distance",
+         rf"(?P<lm>{lm})[^.]{{0,30}}?\s+(?P<q>within|less\s+than)\s+(?:a\s+)?{_DIST}"),
+    ]
+
+
+# Nothing to match against until a city says what its landmarks are, and an
+# empty alternation would match the empty string everywhere — every sentence
+# with a number in it becoming a claim about a place with no name.
+_TEMPLATES: list[tuple[str, re.Pattern]] = []
+
+
+def _from_name(name: str) -> str:
+    """A pattern for a landmark that didn't bother to give one.
+
+    Whitespace-flexible and article-tolerant, which is the whole of the ordinary
+    case: "the Grassmarket" and "Grassmarket" are one place, and a write-up that
+    breaks the name across a line break is still naming it.
+    """
+    return r"(?:the\s+)?" + r"\s+".join(re.escape(w) for w in name.split())
+
+
+def use_landmarks(entries: list[dict]) -> list[str]:
+    """Install a city's landmark table, and say what was wrong with it.
+
+    Called by config.apply when the database changes, which is the only time
+    this can change. Everything derived from the table is rebuilt here rather
+    than per read: these compile into six patterns that run over every write-up,
+    and rebuilding them per record would be the slowest thing in the tool.
+
+    Returns complaints rather than raising them. A landmark with a typo in its
+    pattern is a settings mistake, and the rest of the table — and the rest of
+    the tool — has no reason to stop working over it.
+    """
+    global LANDMARKS, PLACES, _LM_ANY, _LM_ONE, _TEMPLATES
+
+    pairs: list[tuple[str, str]] = []
+    places: dict[str, tuple[float, float]] = {}
+    problems: list[str] = []
+    for i, entry in enumerate(entries or []):
+        if not isinstance(entry, dict):
+            problems.append(f"[[landmark]] #{i + 1} isn't a table")
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            problems.append(f"[[landmark]] #{i + 1} needs a name")
+            continue
+        pattern = str(entry.get("match") or "").strip() or _from_name(name)
+        try:
+            re.compile(pattern, re.I)
+        except re.error as exc:
+            problems.append(f"[[landmark]] {name}: match = {pattern!r} isn't a "
+                            f"pattern ({exc})")
+            continue
+        pairs.append((name, pattern))
+        lat, lon = entry.get("latitude"), entry.get("longitude")
+        if lat is not None and lon is not None:
+            places[name] = (float(lat), float(lon))
+        elif lat is not None or lon is not None:
+            problems.append(f"[[landmark]] {name} has half a coordinate — it "
+                            f"needs both, or neither and enough write-ups to "
+                            f"fit one from")
+
+    LANDMARKS, PLACES = pairs, places
+    _LM_ONE = [(n, re.compile(p, re.I)) for n, p in pairs]
+    _LM_ANY = "|".join(f"(?:{p})" for _, p in pairs)
+    _TEMPLATES = ([(n, re.compile(p, re.I)) for n, p in _shapes(_LM_ANY)]
+                  if _LM_ANY else [])
+    return problems
 
 
 # --------------------------------------------------------------------------
@@ -616,6 +682,10 @@ def locate(records: list[dict],
     the geometry check needs no coordinates that didn't come with the capture —
     point it at a Bordeaux database and it learns Bordeaux.
 
+    Anywhere the city config gave coordinates for is used as given and skipped
+    here. Fitting is what to do about the places you haven't looked up, not a
+    reason to avoid looking any up.
+
     The circles are all too big, because a quoted distance is pavement and a
     fitted position is straight-line. So the ratio between them is fitted too,
     by trying a range and keeping whichever leaves the claims most consistent
@@ -647,9 +717,13 @@ def locate(records: list[dict],
                 continue
             seen.setdefault(c.landmark, []).append((lat, lon, c.metres))
 
-    usable = {n: p for n, p in seen.items() if len(p) >= minimum}
+    # A landmark the config placed needs no fitting, and isn't fitted: a
+    # coordinate you gave is better than one worked out from the sentences being
+    # judged against it, and it holds on the first stay rather than the fourth.
+    usable = {n: p for n, p in seen.items()
+              if len(p) >= minimum and n not in PLACES}
     if not usable:
-        return {}, DETOUR
+        return dict(PLACES), DETOUR
 
     detour, _ = min(
         ((k, _spread([_trilaterate(p, k)[1] for p in usable.values()]))
@@ -658,7 +732,8 @@ def locate(records: list[dict],
 
     return {name: fitted
             for name, points in usable.items()
-            if (fitted := _trilaterate(points, detour)[0]) is not None}, detour
+            if (fitted := _trilaterate(points, detour)[0]) is not None
+            } | dict(PLACES), detour
 
 
 def _spread(values: list[float]) -> float:

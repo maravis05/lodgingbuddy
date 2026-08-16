@@ -1135,13 +1135,15 @@ def cmd_walk(args) -> int:
 
     # The current database's destinations, so a config holding two legs at once
     # measures the Edinburgh stays against Edinburgh and leaves Oban alone.
-    wanted = config.destinations_for(database.current())
+    db = database.current()
+    wanted = config.destinations_for(db)
     if not wanted:
-        elsewhere = " (the ones in it name other databases)" if config.DESTINATIONS else ""
-        print(f"No destinations for {database.current()} in config.toml{elsewhere}, "
-              f"so there's nothing to measure against.\nAdd a [[destination]] "
-              f"with a label and an address, and `db = \"{database.current()}\"` "
-              f"if it belongs to this leg alone.", file=sys.stderr)
+        elsewhere = " (the ones there name other databases)" if config.DESTINATIONS else ""
+        print(f"No destinations for {db} in {config.where()}{elsewhere}, so "
+              f"there's nothing to measure against.\nAdd a [[destination]] with "
+              f"a label and an address to {config.city_path(db).name}, this "
+              f"database's own settings — or to {config.PATH.name} with "
+              f"`db = \"{db}\"` on it.", file=sys.stderr)
         return 1
 
     stays = load()
@@ -1323,6 +1325,15 @@ def cmd_db(args) -> int:
         back = f" `db {was}` goes back to {tally(was)}." if was != name else ""
         print(f"{'Started and now in' if args.new else 'Now in'} {name} — "
               f"{tally(name)}.{back}")
+        # Which settings that put you under. A database's own file is the thing
+        # that makes two trips at once work, and also the thing you'd never
+        # guess had loaded, so switching says either way.
+        settings = config.city_path(name)
+        if settings.exists():
+            print(f"  Settings: {settings.name} over {config.PATH.name}.")
+        else:
+            print(f"  Settings: {config.PATH.name}. {settings.name} beside it "
+                  f"would hold this trip's landmarks, destinations and rates.")
         # The pointer moved, but this run didn't. Saying so beats letting the
         # next command look like it ignored you. On stdout, and after the line
         # it qualifies — a caveat that turns up first reads as a failure.
@@ -1336,13 +1347,21 @@ def cmd_db(args) -> int:
         return 1
 
     here = database.current()
-    width = max(len(n) for n in database.names())
-    for name in database.names():
+    names = database.names()
+    width = max(len(n) for n in names)
+    counts = {n: tally(n) for n in names}
+    count_width = max(len(c) for c in counts.values())
+    for name in names:
         pinned = database.ENV if name == here and database.forced() else ""
-        print(f"{'→' if name == here else ' '} {name.ljust(width)}  {tally(name)}"
-              + (f"   ({pinned}, for this run only)" if pinned else ""))
+        settings = config.city_path(name)
+        line = (f"{'→' if name == here else ' '} {name.ljust(width)}  "
+                f"{counts[name].ljust(count_width)}"
+                + (f"  {settings.name}" if settings.exists() else "")
+                + (f"   ({pinned}, for this run only)" if pinned else ""))
+        print(line.rstrip())
     print(f"\nIn {config.STORE_DIR}. `db <name>` switches and remembers it; "
-          f"`db <name> --new` starts one.")
+          f"`db <name> --new` starts one. A database may keep its own settings "
+          f"in <name>.toml beside it, merged over {config.PATH.name}.")
     return 0
 
 
@@ -1910,6 +1929,12 @@ def cmd_watch(args) -> int:
 
 
 def main() -> int:
+    # Before argparse, because the parser below bakes settings into its own help
+    # and defaults — the sort, the share label, the currency pair — and which
+    # database we're in is what decides those. Everything after this point sees
+    # the city's settings; asking first is the whole of what makes that true.
+    database.current()
+
     p = argparse.ArgumentParser(description="Collate lodging options you pick while browsing.")
     p.set_defaults(parser=p)
     # Not required: with no command at all you get the prompt.
@@ -1972,7 +1997,7 @@ def main() -> int:
     # mistake, but it shouldn't stand between you and the four stays you've
     # already captured.
     for complaint in scoring.complaints():
-        print(f"{config.PATH}: {complaint}", file=sys.stderr)
+        print(f"{config.where()}: {complaint}", file=sys.stderr)
     l.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT)
     l.add_argument("--viable", action="store_true",
                    help="hide stays that fail a must-have in [filters]")

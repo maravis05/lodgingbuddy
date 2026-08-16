@@ -3,6 +3,15 @@
 # Every key here has a built-in default in config.py, so you can delete any line
 # — or this whole file — and the tool still runs. Set LODGINGBUDDY_CONFIG to use
 # a different file.
+#
+# This file is what every database shares. A database may also keep its own —
+# edinbruh.toml beside edinbruh.json — which is merged over this one whenever
+# that database is in use, and is where anything true of a city rather than of
+# the tool belongs: the landmarks its write-ups name, the places worth walking
+# to, what tax is charged and in what currency. Tables merge key by key; a list
+# in a city file replaces the list here outright. [storage] is the exception and
+# is only ever read from this file, since it is what says where the city files
+# themselves live.
 
 
 [storage]
@@ -300,17 +309,22 @@ max_walk_minutes = 0
 require = []
 
 
-# ── Where you want to be ──────────────────────────────────────────────────
+# ── Where you want to be, and what the write-ups there name ───────────────
 #
-# `walk` measures minutes on foot from each stay to each of these. `weight` is
-# that destination's share of the average the walk tier scores; they need not
-# sum to anything.
+# `[[destination]]` and `[[landmark]]` are both facts about a city, so both live
+# in that city's own file — stays.toml and edinbruh.toml beside this one. A trip
+# with two legs still in play is two files, and neither leg's numbers move while
+# you work on the other.
 #
-# `db` says which database a destination belongs to, for a trip with two legs
-# still in play — the Oban stays are measured against Oban and the Edinburgh
-# ones against Edinburgh, in one config, with neither leg's numbers moving when
-# you work on the other. Leave `db` off and the destination counts everywhere,
-# which is what a one-leg trip wants and needs nothing said.
+# They can be put here instead, which is what a one-city setup would do: a
+# `[[destination]]` may carry `db = "edinbruh"` to name the database it belongs
+# to, and one that names none counts everywhere. A city file setting either list
+# replaces whatever this file said.
+#
+#   [[destination]]  label, plus address or latitude/longitude; optional weight
+#                    (its share of the average the walk tier scores) and db
+#   [[landmark]]     name, optional match (a regex for how the write-ups spell
+#                    it), optional latitude/longitude to check claims against
 
 [maps]
 # READ THIS ONE. `walk` sends each stay's coordinates or address, and the
@@ -383,53 +397,6 @@ min_interval_seconds = 1.0
 api_key_env = "GOOGLE_MAPS_API_KEY"
 host = "maps.googleapis.com"
 mode = "walking"
-
-# `address` is geocoded on first use and the answer reused for the rest of the
-# run. Giving `latitude`/`longitude` instead skips that entirely, which is worth
-# doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
-# beach. Coordinates win where both are present.
-[[destination]]
-db = "stays"
-label = "Oban town centre"
-address = "George Street, Oban PA34 5NX, UK"
-weight = 0.6
-
-[[destination]]
-db = "stays"
-label = "Ferry terminal"
-# The postal address doesn't geocode — Nominatim has no "Railway Pier" in Oban
-# and returns nothing at all for it. The pin does.
-latitude = 56.4117438
-longitude = -5.4766190
-weight = 0.25
-
-[[destination]]
-db = "stays"
-label = "Oban Distillery"
-address = "Oban Distillery, Stafford Street, Oban PA34 5NH, UK"
-weight = 0.15
-
-# Edinburgh. Two destinations rather than three, because the third would have
-# been Princes Street and it is 300 m from both of these — a basket of places
-# that close measures one thing while looking like it measures several. What it
-# measures is the walk into the Old Town, which for a three-night city stay is
-# the question. Coordinates rather than addresses: both are pedestrianised
-# stretches Nominatim resolves to one end or the other.
-[[destination]]
-db = "edinbruh"
-label = "Royal Mile"
-# St Giles', the middle of the Mile rather than either end of it.
-latitude = 55.9495
-longitude = -3.1906
-weight = 0.6
-
-[[destination]]
-db = "edinbruh"
-label = "Edinburgh Waverley"
-latitude = 55.9520
-longitude = -3.1892
-weight = 0.4
-
 
 # Sites, tried in the order listed. `domain` is matched against the URL host and
 # `parser` names an adapter in sources.py (booking, sykes, or awaze). Adding

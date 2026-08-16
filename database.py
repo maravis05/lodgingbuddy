@@ -80,8 +80,7 @@ def _pointed() -> str | None:
         return None
 
 
-def current() -> str:
-    """The database everything reads and writes right now."""
+def _resolved() -> str:
     for where, raw in ((ENV, forced()), (POINTER, _pointed())):
         if raw:
             try:
@@ -91,6 +90,19 @@ def current() -> str:
                 # should read as one, not as a stack trace out of `list`.
                 sys.exit(f"{where}: {exc}")
     return config.DEFAULT_DB
+
+
+def current() -> str:
+    """The database everything reads and writes right now.
+
+    Which also settles which settings are in force, so this is where that gets
+    said. A database may carry its own — edinbruh.toml beside edinbruh.json —
+    and the alternative to loading them here is every caller remembering to,
+    which is the same as some of them not.
+    """
+    name = _resolved()
+    config.apply(name)
+    return name
 
 
 def path() -> Path:

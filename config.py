@@ -1,10 +1,23 @@
 """
-Settings, read once from config.toml.
+Settings, in two layers: config.toml, then the database's own file over it.
 
 The dict below is the full set of defaults, so the tool runs with no config file
 at all and a file that sets three keys overrides exactly three keys. Set
 LODGINGBUDDY_CONFIG to read from somewhere other than config.toml next to this
 file.
+
+The second layer is a city. Most of what this tool is told is not a preference
+but a fact about where you are going: what the write-ups there call the castle,
+which places are worth walking to, what tax is charged and in what currency. One
+global file can hold one city's worth of that, and a second trip either
+overwrites it or is measured against the wrong town. So a database may carry its
+own settings — edinbruh.toml beside edinbruh.json — which are merged over the
+global ones whenever that database is the one in use.
+
+Which means every name below can change while the process is running, and
+nothing may take a copy at import: read `config.X` at the point of use, the way
+every module here already does, and `db edinbruh` moves the landmarks, the
+destinations and the VAT rate together.
 
 Constants that aren't settings — the record schema, the status values, the URL
 patterns each site uses — stay in sources.py, where changing one means changing
@@ -161,6 +174,10 @@ DEFAULTS = {
     # Where you actually want to be, per trip. Empty means `walk` has nothing
     # to measure against and says so.
     "destination": [],
+    # The places a city's write-ups name, and how each is spelled. Empty,
+    # because there is no such thing as a default city — see summary.py, which
+    # compiles these into the patterns that read a distance out of a sentence.
+    "landmark": [],
     "source": [
         {"name": "booking.com", "domain": "booking.com", "parser": "booking",
          "currency": "GBP", "tax_included": False, "score_scale": 10},
@@ -198,22 +215,29 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
-def _load() -> dict:
-    if not PATH.exists():
-        return DEFAULTS
+
+
+def _read(path: Path) -> dict:
+    """One TOML file, or nothing where there isn't one."""
+    if not path.exists():
+        return {}
     try:
-        with PATH.open("rb") as fh:
-            return _merge(DEFAULTS, tomllib.load(fh))
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
     except (tomllib.TOMLDecodeError, OSError) as exc:
         # Bad settings should read as bad settings, not as a stack trace out of
         # whichever command happened to import this first.
-        sys.exit(f"Can't read {PATH}: {exc}")
+        sys.exit(f"Can't read {path}: {exc}")
 
 
-CONFIG = _load()
+# What every database shares, and the floor a city's own file sits on.
+BASE = _merge(DEFAULTS, _read(PATH))
 
 # storage
-STORE = Path(CONFIG["storage"]["file"])
+# Taken from BASE alone and never overlaid. This is the setting that says where
+# the databases live, and a city config is one of the files in that folder —
+# letting it move the folder it was found in is a question with no answer.
+STORE = Path(BASE["storage"]["file"])
 if not STORE.is_absolute():
     STORE = HERE / STORE
 # Databases are named files in one folder — stays.json is "stays" — and `db`
@@ -222,87 +246,162 @@ if not STORE.is_absolute():
 STORE_DIR = STORE.parent
 DEFAULT_DB = STORE.stem
 
-# http
-USER_AGENT = CONFIG["http"]["user_agent"]
-TIMEOUT = CONFIG["http"]["timeout_seconds"]
-ACCEPT_LANGUAGE = CONFIG["http"]["accept_language"]
 
-# tax
-VAT_RATE = CONFIG["tax"]["vat_rate"]
+def city_path(db: str) -> Path:
+    """The settings belonging to one database: edinbruh.toml, beside edinbruh.json.
 
-# how the bill splits
-SHARES = CONFIG["split"]["shares"]
-SHARE_LABEL = CONFIG["split"]["label"]
+    Same scheme as the databases themselves, because it is the same idea. What
+    the write-ups in a city call the castle, which places are worth walking to,
+    what tax is charged there — none of that is a preference about the tool, and
+    all of it is wrong the moment you point it at the next town. Keeping it in a
+    file named after the database makes a trip two files with one name, and
+    makes going back to a city you priced last year a matter of having kept
+    them.
+    """
+    return STORE_DIR / (db + ".toml")
 
-# currency
-BASE_CURRENCY = CONFIG["currency"]["base"]
-QUOTE_CURRENCY = CONFIG["currency"]["quote"]
-DEFAULT_RATE = CONFIG["currency"]["default_rate"] or None
-NATIVE_CURRENCY = CONFIG["currency"]["native_default"]
 
-# display
-DEFAULT_SORT = CONFIG["display"]["default_sort"]
-COLUMN_GAP = CONFIG["display"]["column_gap"]
-RULE_CHAR = CONFIG["display"]["rule_char"]
-NAME_WIDTH = CONFIG["display"]["name_width"]
-SOURCE_WIDTH = CONFIG["display"]["source_width"]
-WHERE_WIDTH = CONFIG["display"]["where_width"]
-COLUMNS = CONFIG["display"]["columns"]
-FACTS = CONFIG["display"]["facts"]
-FACTS_TRAITS = CONFIG["display"]["facts_traits"]
-STATUS_MARKS = CONFIG["display"]["status_marks"]
-TAX_MARKS = CONFIG["display"]["tax_marks"]
-GATE_MARKS = CONFIG["display"]["gate_marks"]
+# What's in force right now.
+CONFIG = BASE
+# Which database these settings are for, so `apply` can tell a switch from a
+# repeat — `current()` asks on every read.
+DB: str | None = None
+# The city file in force, or None where the database hasn't got one.
+CITY: Path | None = None
+# Settings problems worth saying out loud. Collected rather than printed:
+# this module is imported before anything exists to print with, and a bad
+# weight shouldn't stand between you and the stays you already have.
+# scoring.complaints() is what reports them.
+PROBLEMS: list[str] = []
 
-# booking
-BOOKING_MIN_PRICE = CONFIG["booking"]["min_price"]
-BOOKING_MAX_PRICE = CONFIG["booking"]["max_price"]
 
-# scoring
-PRICE_UNIT = CONFIG["scoring"]["price_unit"]
-TIERS = CONFIG["scoring"]["tiers"]
-BONUSES = CONFIG["scoring"]["bonuses"]
+def _bind() -> None:
+    """Point every name below at whatever CONFIG now says.
 
-# hard filters
-REQUIRE_ROOM_PER_SHARE = CONFIG["filters"]["room_per_share"]
-MAX_WALK_MINUTES = CONFIG["filters"]["max_walk_minutes"] or None
-REQUIRED_AMENITIES = CONFIG["filters"]["require"]
+    Names rather than lookups because that is what every caller already reads,
+    and rebinding them is what makes `db edinbruh` change the weights, the tax
+    rate and the landmarks rather than only the file the stays land in.
+    """
+    globals().update(
+        # http
+        USER_AGENT=CONFIG["http"]["user_agent"],
+        TIMEOUT=CONFIG["http"]["timeout_seconds"],
+        ACCEPT_LANGUAGE=CONFIG["http"]["accept_language"],
+        # tax
+        VAT_RATE=CONFIG["tax"]["vat_rate"],
+        # how the bill splits
+        SHARES=CONFIG["split"]["shares"],
+        SHARE_LABEL=CONFIG["split"]["label"],
+        # currency
+        BASE_CURRENCY=CONFIG["currency"]["base"],
+        QUOTE_CURRENCY=CONFIG["currency"]["quote"],
+        DEFAULT_RATE=CONFIG["currency"]["default_rate"] or None,
+        NATIVE_CURRENCY=CONFIG["currency"]["native_default"],
+        # display
+        DEFAULT_SORT=CONFIG["display"]["default_sort"],
+        COLUMN_GAP=CONFIG["display"]["column_gap"],
+        RULE_CHAR=CONFIG["display"]["rule_char"],
+        NAME_WIDTH=CONFIG["display"]["name_width"],
+        SOURCE_WIDTH=CONFIG["display"]["source_width"],
+        WHERE_WIDTH=CONFIG["display"]["where_width"],
+        COLUMNS=CONFIG["display"]["columns"],
+        FACTS=CONFIG["display"]["facts"],
+        FACTS_TRAITS=CONFIG["display"]["facts_traits"],
+        STATUS_MARKS=CONFIG["display"]["status_marks"],
+        TAX_MARKS=CONFIG["display"]["tax_marks"],
+        GATE_MARKS=CONFIG["display"]["gate_marks"],
+        # booking
+        BOOKING_MIN_PRICE=CONFIG["booking"]["min_price"],
+        BOOKING_MAX_PRICE=CONFIG["booking"]["max_price"],
+        # scoring
+        PRICE_UNIT=CONFIG["scoring"]["price_unit"],
+        TIERS=CONFIG["scoring"]["tiers"],
+        BONUSES=CONFIG["scoring"]["bonuses"],
+        # hard gates
+        REQUIRE_ROOM_PER_SHARE=CONFIG["filters"]["room_per_share"],
+        MAX_WALK_MINUTES=CONFIG["filters"]["max_walk_minutes"] or None,
+        REQUIRED_AMENITIES=CONFIG["filters"]["require"],
+        # proximity
+        MAPS_ENABLED=CONFIG["maps"]["enabled"],
+        MAPS_ON_CAPTURE=CONFIG["maps"]["on_capture"],
+        TRUST_CLAIMED_WALK=CONFIG["maps"]["trust_claimed_walk"],
+        MAPS_PROVIDER=CONFIG["maps"]["provider"],
+        MAPS_USER_AGENT=CONFIG["maps"]["user_agent"],
+        OSRM_HOST=CONFIG["maps"]["osrm_host"],
+        OSRM_PROFILE=CONFIG["maps"]["osrm_profile"],
+        GEOCODER_HOST=CONFIG["maps"]["geocoder_host"],
+        MAPS_MIN_INTERVAL=CONFIG["maps"]["min_interval_seconds"],
+        MAPS_KEY_ENV=CONFIG["maps"]["api_key_env"],
+        MAPS_HOST=CONFIG["maps"]["host"],
+        MAPS_MODE=CONFIG["maps"]["mode"],
+        DESTINATIONS=CONFIG["destination"],
+        # the city's own vocabulary
+        LANDMARKS=CONFIG["landmark"],
+        # sites, in the order they're tried
+        SOURCES=CONFIG["source"],
+        # bookmarklet build
+        BOOKMARKLET_SRC=HERE / CONFIG["bookmarklet"]["source"],
+        BOOKMARKLET_OUT=HERE / CONFIG["bookmarklet"]["output"],
+        BOOKMARKLET_HTML=HERE / CONFIG["bookmarklet"]["bookmark_file"],
+        BOOKMARKLET_INSTALL=HERE / CONFIG["bookmarklet"]["install_page"],
+        BOOKMARKLET_TITLE=CONFIG["bookmarklet"]["title"],
+        BOOKMARKLET_MAX_BYTES=CONFIG["bookmarklet"]["max_url_bytes"],
+    )
 
-# proximity
-MAPS_ENABLED = CONFIG["maps"]["enabled"]
-MAPS_ON_CAPTURE = CONFIG["maps"]["on_capture"]
-TRUST_CLAIMED_WALK = CONFIG["maps"]["trust_claimed_walk"]
-MAPS_PROVIDER = CONFIG["maps"]["provider"]
-MAPS_USER_AGENT = CONFIG["maps"]["user_agent"]
-OSRM_HOST = CONFIG["maps"]["osrm_host"]
-OSRM_PROFILE = CONFIG["maps"]["osrm_profile"]
-GEOCODER_HOST = CONFIG["maps"]["geocoder_host"]
-MAPS_MIN_INTERVAL = CONFIG["maps"]["min_interval_seconds"]
-MAPS_KEY_ENV = CONFIG["maps"]["api_key_env"]
-MAPS_HOST = CONFIG["maps"]["host"]
-MAPS_MODE = CONFIG["maps"]["mode"]
-DESTINATIONS = CONFIG["destination"]
+
+def apply(db: str) -> None:
+    """Work from `db`'s settings from here on.
+
+    Called by database.current(), so the thing that asks which database it is in
+    is also what loads that database's settings — there is no third place to
+    forget. Cheap on the repeat, which matters because that question gets asked
+    once per record.
+    """
+    global CONFIG, DB, CITY, PROBLEMS
+    if db == DB:
+        return
+
+    path = city_path(db)
+    # A database called "config" would otherwise find the global file as its own
+    # city file and merge it onto itself.
+    itself = path.resolve() == PATH.resolve()
+    overlay = {} if itself else _read(path)
+    problems = []
+    if itself and path.exists():
+        problems.append(f"a database called {db} would take {PATH.name} as its "
+                        f"own settings — ignored, so it holds the global ones")
+    if overlay.pop("storage", None):
+        problems.append(f"[storage] in {path.name} was ignored — a database's "
+                        f"own settings can't move the folder it lives in")
+
+    CONFIG = _merge(BASE, overlay) if overlay else BASE
+    DB, CITY = db, (path if overlay else None)
+    _bind()
+
+    # The landmarks are regexes over the write-ups, so they are compiled here,
+    # once, rather than per record. Imported inside the function because summary
+    # is a reader of settings like everything else and importing it at module
+    # scope would make this file the bottom of a cycle.
+    import summary
+    problems += summary.use_landmarks(CONFIG["landmark"])
+    PROBLEMS = problems
+
+
+_bind()
+
+
+def where() -> str:
+    """The settings files in force, for a message that has to name them."""
+    return PATH.name + (f" + {CITY.name}" if CITY else "")
 
 
 def destinations_for(db: str) -> list[dict]:
     """The places worth walking to, for the database you're working in.
 
-    A trip with two legs in play at once is two sets of destinations, and one
-    global list can't hold both: point the Oban weights at Edinburgh and every
-    stay you already measured is silently re-weighted, which is a worse answer
-    than no answer. So a `[[destination]]` may name the database it belongs to,
-    and one that names none belongs to all of them — the arrangement a single-
-    trip config already has, unchanged and still needing nothing said.
+    Normally the whole answer is "whatever this database's own file said", since
+    a city config is only ever read while its city is the one in use. The filter
+    is for the other arrangement, which still works and needs no migrating: one
+    global list where each `[[destination]]` names the database it belongs to.
+    A destination that names none belongs to all of them.
     """
     return [d for d in DESTINATIONS if d.get("db") in (None, db)]
-
-# sites, in the order they're tried
-SOURCES = CONFIG["source"]
-
-# bookmarklet build
-BOOKMARKLET_SRC = HERE / CONFIG["bookmarklet"]["source"]
-BOOKMARKLET_OUT = HERE / CONFIG["bookmarklet"]["output"]
-BOOKMARKLET_HTML = HERE / CONFIG["bookmarklet"]["bookmark_file"]
-BOOKMARKLET_INSTALL = HERE / CONFIG["bookmarklet"]["install_page"]
-BOOKMARKLET_TITLE = CONFIG["bookmarklet"]["title"]
-BOOKMARKLET_MAX_BYTES = CONFIG["bookmarklet"]["max_url_bytes"]
