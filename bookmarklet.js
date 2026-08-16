@@ -695,6 +695,16 @@
       // minor units on the end: ..._5_0_0__29363 means 293.63. That beats
       // scraping the rendered page, which shows many competing figures.
       //
+      // Which block that is, is the one the search results highlighted: the
+      // cheapest plan that clears your filters. Where a room offers several —
+      // non-refundable against free cancellation, say — the cheap one is the
+      // one taken, and cheapest is the only criterion this tool has. So the
+      // plan's terms are deliberately not recorded: they would be a column
+      // nothing sorts on, filled in by working out which listed price the
+      // captured one is, which the page gives no way to do outright. Confirmed
+      // on a two-plan page: $651 non-refundable against $723 refundable, and
+      // 480.21 GBP captured is the $651.
+      //
       // It is in the *property's* currency, not the one you are being shown
       // prices in. Checked both ways round: 602.14 there renders as $816 on
       // screen and £758.70 at checkout, and only the second is that number
