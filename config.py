@@ -86,6 +86,12 @@ DEFAULTS = {
                 {"min": 2, "points": 8},
                 {"min": 1, "points": 5},
             ]},
+            # Beds not behind a bedroom door. Privacy, which spare_beds — a
+            # measure of elbow room — cannot stand in for.
+            "beds_outside_bedrooms": {"direction": "lower", "steps": [
+                {"max": 0, "points": 10},
+                {"max": 1, "points": 3},
+            ]},
         },
         "bonuses": {
             "wifi": 4, "parking": 6, "kitchen": 5, "washing_machine": 3,

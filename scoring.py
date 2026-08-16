@@ -114,6 +114,23 @@ def spare_beds(rec: dict) -> float | None:
     return float(sleeps - heads)
 
 
+def beds_outside_bedrooms(rec: dict) -> float | None:
+    """Beds not behind a bedroom door — the sofa bed in the lounge.
+
+    Scored apart from spare_beds because they answer different questions.
+    Spare beds are elbow room; this is privacy, and no amount of the first
+    buys the second. Two places that both "sleep 3" are not the same offer
+    when one of them puts the third person in the living room.
+
+    None, not zero, when the site never broke the beds out room by room —
+    an unread layout must not read as a place where everyone gets a door.
+    """
+    import sources  # local, for the same reason complaints() does it
+
+    count = sources.beds_outside_bedrooms(rec.get("beds"))
+    return None if count is None else float(count)
+
+
 def walk_minutes(rec: dict) -> float | None:
     """Minutes on foot to the places you named, weighted by how much each matters.
 
@@ -141,6 +158,7 @@ FACTORS = {
     "cleanliness": cleanliness,
     "look": look,
     "spare_beds": spare_beds,
+    "beds_outside_bedrooms": beds_outside_bedrooms,
 }
 
 
@@ -266,7 +284,15 @@ def gates(rec: dict, shares: int | None) -> list[tuple[str, str]]:
         # Shares are sleeping units — a couple is one, a singleton is one — so a
         # bedroom per share is exactly "nobody shares a room with someone they
         # didn't come with". A hotel booking satisfies it with rooms instead.
-        rooms = max(rec.get("bedrooms") or 0, rec.get("rooms") or 0)
+        #
+        # A known bedroom count wins outright rather than being max()'d against
+        # `rooms`, which comes off the URL's no_rooms and says how many rooms
+        # the *search* asked for. A one-bedroom apartment found by a two-room
+        # search passed this gate on the strength of the question, not the
+        # answer.
+        rooms = rec.get("bedrooms")
+        if rooms is None:
+            rooms = rec.get("rooms") or 0
         if not rooms:
             out.append((f"{shares} private bedrooms", "unknown"))
         elif rooms < shares:

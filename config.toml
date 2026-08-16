@@ -162,6 +162,21 @@ steps = [
   { min = 1, points = 5 },
 ]
 
+# Beds not behind a bedroom door — the sofa bed in the living room. Booking.com
+# breaks its room block out room by room ("Bedroom 1: 1 queen bed", "Living
+# room: 1 sofa bed"), which is the only place this is legible. Scored apart
+# from spare_beds because they are different questions: that one is elbow room,
+# this one is privacy, and no quantity of the first buys the second.
+#
+# A stay whose site never said stays unscored here rather than scoring zero —
+# an unread layout mustn't read as a place where everyone gets a door.
+[scoring.tiers.beds_outside_bedrooms]
+direction = "lower"
+steps = [
+  { max = 0, points = 10 },   # everyone behind a door
+  { max = 1, points = 3 },    # one of you is on the sofa
+]
+
 # Flat points for a fact being true. Amenity names are the canonical slugs in
 # sources.py's AMENITY_ALIASES; `second_bathroom` reads the bathroom count.
 [scoring.bonuses]

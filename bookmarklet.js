@@ -62,7 +62,13 @@
                         '[data-testid="facility-group-container"] li,' +
                         '[data-testid="property-highlights"] li', 40),
       beds: texts('[data-testid="bed-type-name"],' +
-                  '[data-testid="bed-type-configuration"] li', 12)
+                  '[data-testid="bed-type-configuration"] li', 12),
+      // The room table, whole, as text. Narrowing to it first keeps a
+      // "Bedroom 1:" in some other property's carousel out of the answer;
+      // when the selector misses, parseRooms falls back to the page text.
+      rooms: texts('[data-testid="property-section--content"],' +
+                   '#roomstable, .hprt-table, [data-testid="rt-room-block"]', 8)
+                   .join("\n") || null
     };
   }
 
@@ -250,6 +256,99 @@
         else { seen[kind] = { type: kind, count: count }; out.push(seen[kind]); }
       }
     }
+    return out;
+  }
+
+  // Booking.com's room block says which bed is in which room:
+  //
+  //     Two-Bedroom Apartment
+  //     Max. people: 3
+  //     Bedroom 1: 1 queen bed
+  //     Bedroom 2: 1 bunk bed
+  //     Bathrooms:2
+  //
+  // Which is the difference parseBeds throws away. "1 queen + 1 sofa" and
+  // "1 queen + 1 bunk" are the same bed list and not remotely the same offer:
+  // one of them puts somebody in the living room. Rooms named here as the site
+  // names them; deciding what counts as private is one regex, below.
+  var ROOM_NAME = "bedroom|living\\s*room|lounge|sitting\\s*room|dining\\s*room|" +
+                  "studio|mezzanine|attic|loft|basement|hallway|conservatory";
+  var PRIVATE_ROOM = /^bedroom/i;
+  var WORD_NUMBERS = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8
+  };
+
+  // Booking writes it as innerText with line breaks, the node harness as one
+  // collapsed blob. Matching globally over the joined string reads both.
+  function parseRooms(text) {
+    var out = { bedrooms: null, bathrooms: null, sleeps: null, beds: [] };
+    if (!text) return out;
+    var blob = String(text).replace(/\r/g, "");
+
+    var bedRe = new RegExp("(\\d+)?\\s*(" + BED_KINDS + ")[\\s-]*bed", "gi");
+    var labelRe = new RegExp("(" + ROOM_NAME + ")\\s*(\\d+)?\\s*:", "gi");
+    var seenRooms = {}, hits = [], m;
+
+    // Where every room label sits, so each one's beds can be taken as the text
+    // up to the next label. Matching to the end of the line instead would be
+    // right in a browser and wrong everywhere the text arrives collapsed onto
+    // one — where it hands every bed in the block to the first room named.
+    while ((m = labelRe.exec(blob)) !== null) {
+      var label = m[1].replace(/\s+/g, " ").trim();
+      label = label.charAt(0).toUpperCase() + label.slice(1).toLowerCase();
+      if (m[2]) label += " " + m[2];
+      hits.push({ label: label, from: labelRe.lastIndex, at: m.index });
+    }
+
+    for (var h = 0; h < hits.length; h++) {
+      // A line break ends a room's list wherever there is one; failing that,
+      // the next label does; failing both, a cap, so one stray "Bedroom 1:"
+      // can't hoover up every bed word on the page.
+      var stop = h + 1 < hits.length ? hits[h + 1].at : blob.length;
+      var tail = blob.slice(hits[h].from, stop).split("\n")[0].slice(0, 160);
+
+      var key = hits[h].label.toLowerCase();
+      // The same room listed twice — two panels, or a repeated block — is one
+      // room. First mention wins, being the one nearest the heading.
+      if (seenRooms[key]) continue;
+
+      var beds = [], b;
+      bedRe.lastIndex = 0;
+      while ((b = bedRe.exec(tail)) !== null) {
+        beds.push({
+          room: hits[h].label,
+          type: b[2].toLowerCase(),
+          count: b[1] ? parseInt(b[1], 10) : 1,
+          private: PRIVATE_ROOM.test(hits[h].label)
+        });
+      }
+      if (!beds.length) continue;
+      seenRooms[key] = true;
+      for (var i = 0; i < beds.length; i++) out.beds.push(beds[i]);
+    }
+
+    // Bedrooms counted from the rooms that actually listed a bed, so a heading
+    // saying two and a body listing one is answered by the body.
+    var bedrooms = 0;
+    for (var k in seenRooms) if (PRIVATE_ROOM.test(k)) bedrooms++;
+    if (bedrooms) out.bedrooms = bedrooms;
+
+    // "Two-Bedroom Apartment" as the fallback, for a layout that names the
+    // count in the heading and then doesn't break the beds out room by room.
+    if (out.bedrooms == null) {
+      var h = /\b(one|two|three|four|five|six|seven|eight)[\s-]bedroom\b/i.exec(blob);
+      if (h) out.bedrooms = WORD_NUMBERS[h[1].toLowerCase()];
+      else if (/\bstudio\b/i.test(blob)) out.bedrooms = 0;
+    }
+
+    // Colon-and-digit only. "Private bathroom" in a facilities list is not a
+    // count, and "2 bathrooms" in the write-up is prose we don't parse.
+    var bath = /bathrooms?\s*:\s*(\d+)/i.exec(blob);
+    if (bath) out.bathrooms = parseInt(bath[1], 10);
+
+    var max = /max\.?\s*(?:people|persons?|guests?)\s*:?\s*(\d+)/i.exec(blob);
+    if (max) out.sleeps = parseInt(max[1], 10);
+
     return out;
   }
 
@@ -472,7 +571,21 @@
         rec.subscores = parseSubscores(dom.subscores);
       }
       if (dom.facilities && dom.facilities.length) rec.amenities = dom.facilities;
-      if (dom.beds && dom.beds.length) rec.beds = parseBeds(dom.beds);
+
+      // The room block, which says which bed is in which room. Read from the
+      // page text rather than a selector: it survives the class-name churn,
+      // and the labels ("Bedroom 1", "Living room") are the site's own words
+      // in the rendered output whatever the markup around them is doing.
+      var layout = parseRooms(dom.rooms || ctx.text || "");
+      if (layout.beds.length) rec.beds = layout.beds;
+      if (layout.bedrooms != null) rec.bedrooms = layout.bedrooms;
+      if (layout.bathrooms != null) rec.bathrooms = layout.bathrooms;
+      // Max people is the room's own capacity, and beats a guess from the
+      // party size in the URL — which says who is searching, not who fits.
+      if (layout.sleeps != null) rec.sleeps = layout.sleeps;
+
+      // Only if the block gave nothing: the flat, room-blind bed list.
+      if (!rec.beds && dom.beds && dom.beds.length) rec.beds = parseBeds(dom.beds);
 
       var money = moneyAmounts(ctx.text || "");
       rec.price_candidates = money.values;
@@ -513,7 +626,7 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       extract: extract, poundAmounts: poundAmounts,
-      parseBeds: parseBeds, parseSubscores: parseSubscores,
+      parseBeds: parseBeds, parseRooms: parseRooms, parseSubscores: parseSubscores,
       parseScore: parseScore, parseReviews: parseReviews,
       summarise: summarise, asProse: asProse, tidy: tidy
     };

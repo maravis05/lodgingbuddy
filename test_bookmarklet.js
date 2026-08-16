@@ -10,7 +10,7 @@
  */
 
 const fs = require("fs");
-const { extract } = require("./bookmarklet.js");
+const { extract, parseRooms } = require("./bookmarklet.js");
 
 function contextFromFile(path, url) {
   const html = fs.readFileSync(path, "utf8");
@@ -98,9 +98,99 @@ function domFromFile(html) {
   };
 }
 
+// ── unit checks ────────────────────────────────────────────────────────────
+//
+// Run with no arguments. These need no saved page, so they cost nothing and
+// run anywhere — which matters for parseRooms, whose whole job is reading a
+// text shape that differs between a browser and this harness.
+
+const CASES = [
+  {
+    name: "one bedroom, sofa bed in the living room",
+    text: "One-Bedroom Apartment\nNumber of guests: \nMax. people: 3\n" +
+          "Bedroom 1: 1 full bed \nLiving room: 1 sofa bed \n",
+    want: { bedrooms: 1, bathrooms: null, sleeps: 3,
+            beds: [["Bedroom 1", 1, "full", true],
+                   ["Living room", 1, "sofa", false]] }
+  },
+  {
+    name: "two bedrooms, everyone behind a door",
+    text: "Two-Bedroom Apartment\nNumber of guests: \nMax. people: 3\n" +
+          "Bedroom 1: 1 queen bed \nBedroom 2: 1 bunk bed \nBathrooms:2 \n",
+    want: { bedrooms: 2, bathrooms: 2, sleeps: 3,
+            beds: [["Bedroom 1", 1, "queen", true],
+                   ["Bedroom 2", 1, "bunk", true]] }
+  },
+  {
+    // What this harness produces from saved HTML, and a shape some layouts
+    // hand the browser too. Room labels have to be found by position, not by
+    // reading to the end of a line that isn't there.
+    name: "same block with the whitespace collapsed",
+    text: "Two-Bedroom Apartment Number of guests: Max. people: 3 " +
+          "Bedroom 1: 1 queen bed Bedroom 2: 1 bunk bed Bathrooms:2",
+    want: { bedrooms: 2, bathrooms: 2, sleeps: 3,
+            beds: [["Bedroom 1", 1, "queen", true],
+                   ["Bedroom 2", 1, "bunk", true]] }
+  },
+  {
+    name: "several beds in one room",
+    text: "Bedroom 1: 1 double bed, 2 single beds\nMax. people: 4\n",
+    want: { bedrooms: 1, bathrooms: null, sleeps: 4,
+            beds: [["Bedroom 1", 1, "double", true],
+                   ["Bedroom 1", 2, "single", true]] }
+  },
+  {
+    name: "studio has no bedroom",
+    text: "Studio Apartment\nMax. people: 2\nStudio: 1 sofa bed\n",
+    want: { bedrooms: 0, bathrooms: null, sleeps: 2,
+            beds: [["Studio", 1, "sofa", false]] }
+  },
+  {
+    name: "heading count with no room breakdown",
+    text: "Three-Bedroom Cottage\nMax. people: 6\n",
+    want: { bedrooms: 3, bathrooms: null, sleeps: 6, beds: [] }
+  },
+  {
+    // "Private bathroom" is a facility, not a count, and the write-up saying
+    // "two bathrooms" is prose. Only the colon-and-digit form is a number.
+    name: "facilities list is not a bathroom count",
+    text: "Free Wifi\nPrivate bathroom\nKitchen\nThe apartment has two bathrooms.\n",
+    want: { bedrooms: null, bathrooms: null, sleeps: null, beds: [] }
+  },
+];
+
+function checkRooms() {
+  let failed = 0;
+  for (const c of CASES) {
+    const got = parseRooms(c.text);
+    const flat = got.beds.map(b => [b.room, b.count, b.type, b.private]);
+    const problems = [];
+    for (const k of ["bedrooms", "bathrooms", "sleeps"]) {
+      if (got[k] !== c.want[k]) problems.push(`${k}: got ${got[k]}, want ${c.want[k]}`);
+    }
+    if (JSON.stringify(flat) !== JSON.stringify(c.want.beds)) {
+      problems.push(`beds:\n      got  ${JSON.stringify(flat)}\n      want ${JSON.stringify(c.want.beds)}`);
+    }
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
+
 const [, , path, url] = process.argv;
+if (!path && !url) {
+  const failed = checkRooms();
+  console.log(failed ? `\n${failed} failed` : `\n${CASES.length} passed`);
+  process.exit(failed ? 1 : 0);
+}
 if (!path || !url) {
-  console.error("usage: node test_bookmarklet.js <saved.html> <original-url>");
+  console.error("usage: node test_bookmarklet.js [<saved.html> <original-url>]");
+  console.error("       with no arguments, runs the unit checks");
   process.exit(2);
 }
 const rec = extract(contextFromFile(path, url));

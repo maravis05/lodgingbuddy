@@ -258,6 +258,31 @@ overrides the site's cleanliness sub-score where there is one — you looked at
 the photos with your own standards in mind, and an aggregate of strangers
 didn't.
 
+**Who ends up on the sofa** is its own tier, `beds_outside_bedrooms`, scored
+apart from `spare_beds` because they answer different questions: spare beds are
+elbow room, this is privacy, and no quantity of the first buys the second.
+Booking.com breaks its room block out room by room, which is the only place
+this is legible at all:
+
+```
+Two-Bedroom Apartment          One-Bedroom Apartment
+Max. people: 3                 Max. people: 3
+Bedroom 1: 1 queen bed         Bedroom 1: 1 full bed
+Bedroom 2: 1 bunk bed          Living room: 1 sofa bed
+Bathrooms: 2
+```
+
+Both sleep three. Only one of them puts everybody behind a door, and a bed list
+that says "1 queen, 1 bunk" against "1 full, 1 sofa" barely hints at it. The
+room labels come over with the beds, so `show` prints `Bedroom 1: 1 queen ·
+Bedroom 2: 1 bunk`, and the count of beds outside a bedroom scores: 0 is worth
+10 points, 1 is worth 3.
+
+A site that never broke the beds out room by room leaves this **unscored**
+rather than scoring zero — an unread layout must not read as a place where
+everyone gets a door. It shows up in `show`'s `no data:` tail, as everything
+unmeasured does.
+
 The **summary** is captured but not scored, and deliberately so: nothing here
 reads prose, and a number quietly derived from one would be a judgement you
 couldn't check. It's kept because it's the evidence — the sofa bed, the steep
@@ -293,6 +318,14 @@ require = []             # e.g. ["parking", "wifi"]
 idea as the split: a couple is one share and one bedroom, a singleton is one
 share and one bedroom. Three of you sharing two ways needs two bedrooms. A
 hotel booking satisfies it with rooms instead.
+
+A bedroom count the site actually stated wins outright here. It used to be
+taken as the larger of that and the room count — but on Booking.com the room
+count comes off the URL's `no_rooms`, which says how many rooms your *search*
+asked for. A one-bedroom apartment turned up by a two-room search cleared a
+two-bedroom must-have on the strength of the question rather than the answer.
+Where no bedroom count is known, the room count is still the fallback, which
+is what keeps hotels working.
 
 A stay that fails is marked `✗` and kept — you captured it, so it stays
 captured. `list --viable` hides them. A stay we simply lack the data on is
@@ -560,12 +593,22 @@ already sitting on a clipboard keeps working.
 
 For Booking.com it is the *only* route to anything but the price, since the
 property pages are WAF-locked to everything that isn't a browser. It reads the
-review score and its sub-scores, the review count, the facilities list, the bed
-configuration, **the property write-up**, the address and the map pin's
-coordinates — off `data-testid` hooks and the map's `data-atlas-latlng`, which
-have outlasted several rounds of class-name obfuscation. Amenities travel in the site's own words and are
-normalised into slugs on the Python side, so the alias table lives in one
-language rather than being kept in step across two.
+review score and its sub-scores, the review count, the facilities list, **the
+property write-up**, the address and the map pin's coordinates — off
+`data-testid` hooks and the map's `data-atlas-latlng`, which have outlasted
+several rounds of class-name obfuscation. Amenities travel in the site's own
+words and are normalised into slugs on the Python side, so the alias table
+lives in one language rather than being kept in step across two.
+
+It also reads **the room block** — bedroom count, bathroom count, max
+occupancy, and which bed sits in which room. That last one is read out of the
+rendered text rather than through a selector, because the labels are the site's
+own words ("Bedroom 1", "Living room") whatever the markup around them is doing
+that week. Parsing it by finding the label positions and taking each room's
+beds as the text up to the next label handles both shapes the text arrives in:
+with line breaks in a browser, and collapsed onto one line under the test
+harness. Matching to the end of a line handles only the first, and quietly
+hands every bed in the block to whichever room is named first.
 
 The alert now names what it captured, not just the price:
 
@@ -585,8 +628,25 @@ A missing line there is how you find out a site changed its markup — before th
 stay lands in the table scoring zero for no visible reason.
 
 It only reads the DOM — no network calls, no cookies, no storage — and the
-extractor is split from the browser plumbing so it can be tested against saved
-HTML under node (`test_bookmarklet.js`).
+extractor is split from the browser plumbing so it can be tested outside a
+browser:
+
+```console
+$ node test_bookmarklet.js                          # unit checks, no page needed
+ok    one bedroom, sofa bed in the living room
+ok    two bedrooms, everyone behind a door
+ok    same block with the whitespace collapsed
+...
+7 passed
+
+$ node test_bookmarklet.js saved.html <original-url>   # against a real page
+```
+
+With no arguments it runs the room-block cases, which need no fixture and so
+cost nothing to run. Given a page saved out of your browser with Ctrl-S and the
+URL you saved it from, it runs the whole extractor and prints the record — the
+only way to check the Booking.com path, which has no JSON-LD and no
+`__NEXT_DATA__` to read.
 
 Where a page shows several plausible amounts and none is clearly the total, it
 reports them as candidates rather than guessing. Booking.com only reveals the
