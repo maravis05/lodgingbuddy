@@ -25,8 +25,9 @@ running the script by bare path opens it in whatever owns `.py`.
 | `add <url>` | Fetch and store one stay. `--price --currency --nights --adults --note` |
 | `paste [json]` | Store a record from the bookmarklet; reads stdin if no argument |
 | `set <id> ...` | Fill in or correct fields (below) |
-| `list` | The table. `--sort --viable --no-facts --rate` |
+| `list` | The table. `--sort --viable --no-facts --links --rate` |
 | `show <id>` | One stay in full. `--json` for the raw record, `--rate` to convert |
+| `url [id]` | The listing's link, on a line of its own. No id gives all of them, in sort order |
 | `refresh [id]` | Re-fetch listing pages and update prices |
 | `walk [id]` | Measure walking time to your destinations. `--again` re-measures |
 | `glean [id]` | Re-read stored write-ups and file what they say |
@@ -44,6 +45,46 @@ code, then a substring of the name.
 
 `list --sort` takes `value` (default), `share`, `price`, `score`, `sleeps`,
 `walk`, `points`, `checkin`, `name`.
+
+## Getting back to a listing
+
+Every stay keeps the URL it was captured from, and that URL is the one you were
+looking at — for Booking.com that means the dates, the party size and the
+identifier of the room block whose price ended up in the table. Opening it puts
+you back on the same quote rather than on the property's front page for
+whenever today is.
+
+`list` ends with the links to its top few, taken from the top of whatever order
+it just sorted into, so `--sort share` and `--sort walk` end with different
+ones:
+
+```
+Top 3 by value:
+  1. Peaceful 3 Bedroom Townhouse Edinburgh
+     https://www.booking.com/hotel/gb/peaceful-3-bedroom-townhouse-…
+  2. 30 Aberlady
+     https://www.booking.com/hotel/gb/30-aberlady.html?…
+  3. Km Granton Apartment
+     https://www.booking.com/hotel/gb/km-granton-apartment.html?…
+```
+
+How many is `links` in `[display]` (default 3), or `list --links N` for one
+run. `--links 0` turns them off. They print unwrapped, because a URL folded to
+the width of the terminal is one you can't click, and a trimmed one opens a
+different quote.
+
+`url <id>` prints any single stay's link and nothing else, which is the form
+you can hand to something:
+
+```
+python3 lodgingbuddy.py url aberlady | xargs xdg-open
+python3 lodgingbuddy.py url aberlady | xclip -selection clipboard
+```
+
+With no id it prints them all, one per line, in the order `list` would have put
+them — `--sort` picks which order. Both forms exit non-zero and say why if the
+id matches nothing, or if the stay it matched was entered by hand and has no
+URL to give.
 
 ## The prompt
 
@@ -257,7 +298,7 @@ other files live.
 | `[tax]` | `vat_rate`, used when a source quotes ex-tax and the page states nothing |
 | `[split]` | Default number of shares and what to call one |
 | `[currency]` | Base and quote codes, default conversion rate, default native currency |
-| `[display]` | Columns, widths, sort, glyphs, and whether the per-stay facts lines print |
+| `[display]` | Columns, widths, sort, glyphs, whether the per-stay facts lines print, and how many links follow the table |
 | `[booking]` | Sanity bounds on prices read out of URLs |
 | `[scoring]` | `price_unit`, `[scoring.tiers.*]`, `[scoring.bonuses]` |
 | `[filters]` | The gates |

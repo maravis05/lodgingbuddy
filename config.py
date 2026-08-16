@@ -117,6 +117,9 @@ DEFAULTS = {
         # width of the terminal is what actually decides, since the line is
         # fitted to it and never wraps.
         "facts_traits": 8,
+        # How many links `list` prints under the table, from the top of
+        # whatever order it just sorted into. 0 prints none.
+        "links": 3,
         "status_marks": {"ok": " ", "needs_price": "·", "blocked": "!"},
         "tax_marks": {"inclusive": "", "added": "+", "computed": "=",
                       "unknown": "?"},
@@ -476,6 +479,7 @@ def _bind() -> None:
         COLUMNS=CONFIG["display"]["columns"],
         FACTS=CONFIG["display"]["facts"],
         FACTS_TRAITS=CONFIG["display"]["facts_traits"],
+        LINKS=CONFIG["display"]["links"],
         STATUS_MARKS=CONFIG["display"]["status_marks"],
         TAX_MARKS=CONFIG["display"]["tax_marks"],
         GATE_MARKS=CONFIG["display"]["gate_marks"],

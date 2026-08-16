@@ -117,6 +117,18 @@ facts = "lines"
 # anything about any of them.
 facts_traits = 8
 
+# How many links `list` prints under the table, taken from the top of whatever
+# order it just sorted into. The table tells you which stay wins; this is what
+# you do about it — the row itself has nowhere to put a URL, and a listing you
+# can't get back to is one you can't book.
+#
+# They print in full and unwrapped, because a Booking.com link carries the
+# dates, the party and the room block that produced the price in its row, and a
+# trimmed one lands you on a different quote. Three is about what fits before
+# the table above them scrolls away; 0 prints none, and `list --links 10` or
+# `--links 0` overrides this for one run. `url <id>` fetches any single one.
+links = 3
+
 # Leading glyph per record status.
 [display.status_marks]
 ok = " "

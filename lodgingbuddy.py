@@ -923,7 +923,42 @@ def cmd_list(args) -> int:
             print(line)
 
     footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
+    asked = getattr(args, "links", None)
+    links(stays, args.sort, config.LINKS if asked is None else asked)
     return 0
+
+
+def links(stays: list[dict], sort: str, count: int) -> None:
+    """The way back to the stays at the top of the table.
+
+    A sorted table answers "which one", and then leaves you holding a name you
+    have to go and find again. These are the same rows, in the same order, as
+    something you can open — which is the point of having ranked them.
+
+    Printed in full and unwrapped. A Booking.com link carries the dates, the
+    party size and the identifier of the room block whose price is in the row
+    above it, so a URL folded to the terminal's width, or trimmed to look
+    tidier, is one that opens a different quote than the one you're reading.
+
+    Under the footnotes rather than beside the rows for the same reason the
+    facts line isn't a column: there is no width at which this fits one, and
+    the table has to stay scannable.
+    """
+    shown = [r for r in stays if r.get("url")][:max(count, 0)]
+    if not shown:
+        return
+    # Named after the sort because that is what makes them the top three rather
+    # than three of them, and the sort is a flag you may well have set on this
+    # run and not the last one.
+    print(f"\nTop {len(shown)} by {sort}:" if len(shown) > 1
+          else f"\nTop by {sort}:")
+    for place, rec in enumerate(shown, 1):
+        print(f"  {place}. {rec.get('name') or '?'}")
+        print(f"     {rec['url']}")
+    # Only when there are others to fetch. A pointer to a command for getting
+    # what is already on the screen reads as noise.
+    if len(shown) < sum(1 for r in stays if r.get("url")):
+        print(f"  {RUN} url <id>   for any of the rest")
 
 
 def footnotes(stays, marks, gates, seen_tax, seen_cur, rate) -> None:
@@ -1612,6 +1647,47 @@ def cmd_show(args) -> int:
     return 0
 
 
+def cmd_url(args) -> int:
+    """The link back to a listing, on a line with nothing else on it.
+
+    `show` prints the URL too, in among everything else we hold about the stay.
+    This is the form you can hand to something: pipe it, open it, put it on the
+    clipboard, without first cutting a line up.
+
+        python3 lodgingbuddy.py url aberlady | xargs xdg-open
+
+    With no id it's every stay, in the order `list` would have put them, which
+    is what opening the shortlist again actually means.
+    """
+    stays = load()
+    if args.id:
+        rec = find(stays, args.id)
+        if not rec:
+            print(f"No stay matching {args.id!r}", file=sys.stderr)
+            return 1
+        # Distinguished from "no such stay", because the two want different
+        # things done about them: one is a typo, the other is a record that
+        # arrived by hand and can be given a URL with `set`.
+        if not rec.get("url"):
+            print(f"{rec.get('name') or args.id} has no URL stored.",
+                  file=sys.stderr)
+            return 1
+        print(rec["url"])
+        return 0
+
+    # The configured rate rather than a flag of our own: `value` and `share`
+    # divide by it, so the order has to be arrived at the same way `list`
+    # arrives at it when you don't pass `--rate` either.
+    stays.sort(key=lambda r: SORTS[args.sort](r, config.DEFAULT_RATE))
+    found = [r["url"] for r in stays if r.get("url")]
+    if not found:
+        print("No URLs stored in this database.", file=sys.stderr)
+        return 1
+    for url in found:
+        print(url)
+    return 0
+
+
 # ────────────────────────────── the prompt ─────────────────────────────────
 
 # What a sign in front of a typed total means. Booking pages print the sign
@@ -1866,8 +1942,9 @@ PROMPT_HELP = """\
   behind a "read more". It appends: blank line when you've finished, and
   `set <id> --summary "..."` replaces instead.
 
-  Commands: add, paste, list, show, set, walk, refresh, rm, db.
+  Commands: add, paste, list, show, url, set, walk, refresh, rm, db.
   `set <id> --look 4 --clean 5` marks the things no site can tell you.
+  `list` ends with the links to its top few; `url <id>` fetches any one.
   The prompt is named after the database you're capturing into. `db` lists
   them, `db <name>` moves to another, `db <name> --new` starts one.
   `quit` leaves. Ctrl-C clears the line. Ctrl-D quits too, but only on
@@ -2088,6 +2165,12 @@ def main() -> int:
                    help="hide stays that fail a must-have in [filters]")
     l.add_argument("--no-facts", action="store_true",
                    help="drop the line under each stay summarising its write-up")
+    # Defaulting to None rather than to config.LINKS so that "you didn't say"
+    # and "you said 0" stay different answers — the second has to be able to
+    # turn off a table that's configured to print them.
+    l.add_argument("--links", type=int, default=None, metavar="N",
+                   help="how many links to print under the table, from the top "
+                        f"down (default {config.LINKS}; 0 for none)")
     l.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
                    metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                    help=f"convert {config.BASE_CURRENCY} prices to "
@@ -2141,6 +2224,13 @@ def main() -> int:
                     help=f"convert {config.BASE_CURRENCY} prices to "
                          f"{config.QUOTE_CURRENCY} at this rate")
     sh.set_defaults(func=cmd_show)
+
+    u = sub.add_parser("url", help="print the link back to a listing")
+    u.add_argument("id", nargs="?",
+                   help="which stay; omit for all of them, one per line")
+    u.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT,
+                   help="what order to print them in, when no id is given")
+    u.set_defaults(func=cmd_url)
 
     w = sub.add_parser("watch", help="hold a prompt open for pasted links")
     w.add_argument("--rate", type=float, default=config.DEFAULT_RATE,

@@ -15,6 +15,11 @@ __pycache__/
 # cities/*.cityconf.toml is the half worth committing, and isn't matched here.
 /*.toml
 !/config.toml
+# And by name, unanchored, for the same reason the stays are: a database kept
+# off in a folder of its own takes its settings with it, and the rule above
+# only reaches the root — where it has to stay, so config.toml can be excepted
+# from it.
+*.dbconf.toml
 
 # Built from bookmarklet.js by build_bookmarklet.py. Generate these, don't clone them.
 bookmarklet.html
