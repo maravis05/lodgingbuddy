@@ -35,6 +35,7 @@ import datetime as dt
 import json
 import os
 import shlex
+import shutil
 import sys
 import textwrap
 
@@ -480,7 +481,7 @@ def cmd_set(args) -> int:
     amount, cur, estimated = all_in(rec)
     print(f"Updated {rec['name']}")
     if args.summary is not None:
-        print(f"  {describe_gleaned(rec, gleaned) or 'nothing new in the write-up'}")
+        print(facts_line(rec, verdict=gleaned) or "  nothing new in the write-up")
     if amount:
         vat = rec.get("vat_rate") or config.VAT_RATE
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
@@ -530,10 +531,9 @@ TRAIT_WORDS = {
     "ground_floor": "ground floor",
 }
 
-# Which traits earn the limited room on the facts line. The ones that would
-# change your mind come first — where you sleep, what it costs on the day, who
-# is allowed — and the fittings that merely confirm it's a normal flat come
-# last. Anything unlisted sorts after these, alphabetically.
+# The tie-break when two traits are equally rare, and the whole order when
+# there is no table to be rare within. Roughly: things that would change your
+# mind, then things that describe the building, then fittings.
 TRAIT_ORDER = [
     "adults_only", "visitor_levy", "soundproofed", "ground_floor",
     "upper_floor", "historic_building", "renovated", "free_parking",
@@ -543,11 +543,48 @@ TRAIT_ORDER = [
     "garden_view", "licensed",
 ]
 
+# Property kinds, shortened. Only one of them is long enough to be worth it and
+# it's the one two thirds of the table says.
+KIND_WORDS = {"apartment": "apt"}
 
-def trait_words(traits: list[str], limit: int | None = None) -> str:
-    """A record's traits as a phrase, most decisive first."""
+
+def how_rare(stays: list[dict]) -> dict[str, int]:
+    """How many of these stays carry each trait.
+
+    The line under a row has space for about four of them, and which four is
+    worth arguing about: `microwave` is true of eleven of the thirty Edinburgh
+    flats and tells you nothing, while `adults_only` is true of one and is the
+    most useful thing on that row. Frequency across the table you're actually
+    looking at answers that better than any fixed order can, and it re-answers
+    it as the table changes — a trait every stay in a shortlist shares stops
+    being worth the space the moment they all share it.
+    """
+    counts: dict[str, int] = {}
+    for rec in stays:
+        for trait in rec.get("traits") or []:
+            counts[trait] = counts.get(trait, 0) + 1
+    return counts
+
+
+def notable(traits: list[str], rarity: dict[str, int] | None = None) -> list[str]:
+    """A stay's traits, the ones worth the space first.
+
+    Rare and important are not the same thing and the order needs both. On the
+    Edinburgh set `kettle` is rarer than `free parking` — three stays mention
+    one, seven the other — and rarity alone put the kettle first, which is
+    nobody's idea of the useful fact. So TRAIT_ORDER decides the tier and
+    rarity decides the order within it: the traits that could change your mind,
+    least common first, and then the fittings on the same terms.
+    """
     rank = {name: i for i, name in enumerate(TRAIT_ORDER)}
-    ordered = sorted(traits, key=lambda t: (rank.get(t, len(rank)), t))
+    return sorted(traits, key=lambda t: (t not in rank,
+                                         (rarity or {}).get(t, 0),
+                                         rank.get(t, len(rank)), t))
+
+
+def trait_words(traits: list[str], limit: int | None = None,
+                rarity: dict | None = None) -> str:
+    ordered = notable(traits, rarity)
     shown = ordered if limit is None else ordered[:limit]
     words = [TRAIT_WORDS.get(t, t.replace("_", " ")) for t in shown]
     if limit is not None and len(ordered) > limit:
@@ -555,28 +592,108 @@ def trait_words(traits: list[str], limit: int | None = None) -> str:
     return ", ".join(words)
 
 
-def describe_gleaned(rec: dict, verdict=None) -> str:
-    """What this stay's write-up gave us that nothing else did.
+def beds_brief(beds: list | None) -> str:
+    """The bed list in the fewest words that still settle it.
 
-    Reads the record rather than the verdict wherever it can, so the same
-    sentence describes a stay captured just now and one captured last week —
-    a line that only appears on fresh captures is a line you can't trust the
-    absence of.
+    Aggregated across rooms rather than listed by room — "2 full, 1 sofa"
+    rather than "Bedroom 1: 1 full · Bedroom 2: 1 full · Living room: 1 sofa",
+    which is `show`'s job and four times the width. What survives the squeeze is
+    the sofa, and the sofa is the whole question: a one-bedroom flat that sleeps
+    three does it by putting somebody in the lounge, and the Space column says
+    "1br" either way.
     """
-    parts = []
-    if rec.get("kind"):
-        parts.append(rec["kind"])
-    if traits := rec.get("traits"):
-        parts.append(trait_words(traits, config.FACTS_TRAITS))
-    if gleaned := rec.get("gleaned"):
-        # Named rather than shown: the values are already in the columns above,
-        # and what this adds is where they came from.
-        parts.append("from the prose: " + ", ".join(gleaned))
+    if not beds:
+        return ""
+    totals: dict[str, int] = {}
+    for bed in beds:
+        kind = bed.get("type") or "bed"
+        totals[kind] = totals.get(kind, 0) + (bed.get("count") or 1)
+    return ", ".join(f"{n} {kind}" for kind, n in totals.items())
+
+
+def place_brief(name: str) -> str:
+    """A landmark's name with the half you already know taken off."""
+    return {"National Museum of Scotland": "the Museum"}.get(
+        name, name.removeprefix("Edinburgh "))
+
+
+# How far a claimed walk can be and still be worth naming on one line. The
+# record keeps everything up to an hour, because a 50-minute walk is a fact
+# about a stay two miles out; a line with room for two is a line that should
+# spend them on somewhere you'd actually go before dinner.
+WORTH_NAMING = 30
+
+
+def claimed_brief(rec: dict, limit: int = 2) -> str:
+    """The nearest places the listing bothered to time, in its own words."""
+    claimed = rec.get("walk_claimed") or {}   # already nearest-first
+    near = [(place, mins) for place, mins in claimed.items()
+            if mins <= WORTH_NAMING]
+    return ", ".join(f"{mins}m {place_brief(place)}"
+                     for place, mins in near[:limit])
+
+
+FACTS_INDENT = "    ↳ "
+FACTS_SEP = " · "
+# Below this many traits the line has stopped being worth the row it costs, so
+# the walks give up their place rather than the traits.
+FACTS_MIN_TRAITS = 2
+
+
+def facts_line(rec: dict, width: int = 100, rarity: dict | None = None,
+               verdict=None) -> str:
+    """One line saying what the listing's own write-up adds to the row above it.
+
+    One line, always — it wrapped before, and a two-line row in a thirty-row
+    table costs more than the facts on the second line are worth. So the parts
+    are dropped in order of what you'd miss least: the walks the listing
+    claims, then the least distinguishing traits, and what's left says how many
+    were cut.
+
+    Nothing here says where a fact came from. Everything on this line was
+    scraped off the same page as everything in the columns above it, and
+    flagging half of it as "from the prose" ranked facts by which paragraph
+    printed them, which is not a ranking.
+    """
+    kind = rec.get("kind") or ""
+    fixed = [x for x in (KIND_WORDS.get(kind, kind), beds_brief(rec.get("beds")))
+             if x]
+    traits = [TRAIT_WORDS.get(t, t.replace("_", " "))
+              for t in notable(rec.get("traits") or [], rarity)]
+    walks = claimed_brief(rec)
     if verdict is not None and verdict.conflicts:
-        parts.append("disagrees with the page on "
+        # Loud, and never cut: two sources disagreeing about the same property
+        # outranks anything either of them agrees on.
+        fixed.append("disagrees with the page on "
                      + ", ".join(f"{k} ({held} vs {said})"
                                  for k, (held, said) in verdict.conflicts.items()))
-    return " · ".join(parts)
+
+    def build(count: int, tail: str) -> str:
+        parts = list(fixed)
+        if count:
+            words = traits[:count]
+            if len(traits) > count:
+                words.append(f"+{len(traits) - count}")
+            parts.append(", ".join(words))
+        elif traits:
+            parts.append(f"+{len(traits)}")
+        if tail:
+            parts.append(tail)
+        return FACTS_INDENT + FACTS_SEP.join(parts) if parts else ""
+
+    def longest(tail: str) -> tuple[int, str]:
+        for count in range(min(config.FACTS_TRAITS, len(traits)), -1, -1):
+            line = build(count, tail)
+            if len(line) <= width:
+                return count, line
+        return -1, ""
+
+    if walks:
+        count, line = longest(walks)
+        if count >= min(FACTS_MIN_TRAITS, len(traits)):
+            return line
+    _, line = longest("")
+    return line or build(0, "")[:width]
 
 
 # Each column as (header, how to render one row). Which of them `list` prints,
@@ -609,7 +726,8 @@ COLUMNS = {
                                          if scoring.walk_minutes(r) is not None else "—")),
     "kind":     ("Kind", lambda r, ctx: r.get("kind") or "—"),
     "traits":   ("From the write-up", lambda r, ctx: trait_words(
-                    r.get("traits") or [], config.FACTS_TRAITS) or "—"),
+                    r.get("traits") or [], config.FACTS_TRAITS,
+                    ctx.get("rarity")) or "—"),
     "points":   ("Pts", lambda r, ctx: f"{ctx['score'](r).points:g}"),
     "value":    ("Value", lambda r, ctx: (f"{ctx['score'](r).value:g}"
                                           if ctx["score"](r).value is not None else "—")),
@@ -680,7 +798,12 @@ def cmd_list(args) -> int:
         return (from_mark(rec, tax)
                 + f"{amount:,.0f} {cur}".strip() + config.TAX_MARKS.get(tax, ""))
 
-    ctx = {"rate": rate, "money": money, "score": lambda r: marks[key_of(r)]}
+    # Worked out over the stays being shown, so `--viable` and a filtered
+    # shortlist re-rank what counts as worth mentioning — in the column and in
+    # the line under it, which have to agree.
+    rarity = how_rare(stays)
+    ctx = {"rate": rate, "money": money, "rarity": rarity,
+           "score": lambda r: marks[key_of(r)]}
 
     chosen = [c for c in config.COLUMNS if c in COLUMNS]
     if unknown := [c for c in config.COLUMNS if c not in COLUMNS]:
@@ -704,14 +827,17 @@ def cmd_list(args) -> int:
     # no width at which "soundproofed, historic building, private entrance"
     # fits a column, and truncating it to one would throw away the trait that
     # decided the stay. Off with `--no-facts`, or `facts = "off"` for good.
+    #
+    # Fitted to the terminal rather than to the table, because it is prose and
+    # can use whatever room is going. Never past it: a line that wraps turns
+    # every stay into two rows and the table stops being scannable, which is
+    # the only thing it was for.
     facts = config.FACTS_LINE and not getattr(args, "no_facts", False)
+    width = max(shutil.get_terminal_size((table_width, 24)).columns, 60)
     for rec, row in zip(stays, rows):
         print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
-        if facts and (line := describe_gleaned(rec)):
-            # Indented past the status glyph, so the rows still read as a
-            # column of names with notes hanging off them.
-            print(textwrap.fill(line, width=max(table_width, 60),
-                                initial_indent="    ↳ ", subsequent_indent="      "))
+        if facts and (line := facts_line(rec, width, rarity)):
+            print(line)
 
     footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
     return 0
@@ -867,6 +993,8 @@ def cmd_glean(args) -> int:
     # Fitted from every stay we hold, not just the ones being re-read, so
     # `glean <id>` judges that one against the same map as a whole-database run.
     places, detour = summary.locate(stays)
+    width = max(shutil.get_terminal_size((100, 24)).columns, 60)
+    rarity = how_rare(stays)
 
     read = nothing = 0
     conflicts, doubted = [], []
@@ -880,7 +1008,7 @@ def cmd_glean(args) -> int:
         doubted += [(rec, c) for c in verdict.doubted]
         if verdict.anything():
             read += 1
-            print(f"  {rec.get('name') or '?'}: {describe_gleaned(rec, verdict)}")
+            print(f"  {rec.get('name') or '?'}\n{facts_line(rec, width, rarity, verdict)}")
     save(stays)
 
     print(f"\nRead {read} write-up{'s' if read != 1 else ''}.", end="")
@@ -1198,14 +1326,15 @@ def describe(rec: dict, rate: float | None = None) -> str:
     row("Has", ", ".join(rec.get("amenities") or []))
     row("Kind", rec.get("kind"))
     # In full here, not the handful the table has room for — `show` is where you
-    # go when the row didn't settle it.
+    # go when the row didn't settle it. Not marked as read from the description
+    # rather than the feature list: it all came off the same page, and saying
+    # which paragraph would rank facts by their typesetting. `--json` still
+    # carries `gleaned` for the day you need to ask.
     row("Says", trait_words(rec.get("traits") or []))
     row("Walk", proximity.describe(rec))
     if claimed := rec.get("walk_claimed"):
         row("", "the listing claims " + ", ".join(
             f"{m} min to {place}" for place, m in claimed.items()))
-    if gleaned := rec.get("gleaned"):
-        row("", f"{', '.join(gleaned)} read out of the write-up, not the page")
     if rec.get("score"):
         n = f" from {rec['reviews']} reviews" if rec.get("reviews") else ""
         pct = scoring.guest_score(rec)

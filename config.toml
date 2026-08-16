@@ -69,8 +69,8 @@ source_width = 11
 where_width = 20
 
 # What the listing's own write-up said, under each row: what kind of place it
-# is, the facts summary.py could read out of the prose, and which of the columns
-# above are filled from it rather than from the page's markup.
+# is, who sleeps where, the facts nothing else has a column for, and the nearest
+# places it bothered to time.
 #
 # "line" is a second, indented line per stay; "off" leaves the table one row
 # each. There are `kind` and `traits` columns above for the middle ground, and
@@ -79,10 +79,18 @@ where_width = 20
 # private entrance" fits one, and the trait that decides a stay is exactly the
 # one a truncated column would drop.
 facts = "line"
-# How many traits the line and the `traits` column will show before "+3". The
-# order isn't alphabetical — it's most-likely-to-change-your-mind first, which
-# is TRAIT_ORDER in lodgingbuddy.py.
-facts_traits = 6
+# The most traits the line will name before "+3" — an upper bound, not a
+# target. What actually decides is the width of your terminal: the line is
+# fitted to it and never wraps, because a two-line row in a thirty-row table
+# costs more than the second line is worth.
+#
+# Which traits get the room is decided per table rather than by a fixed order.
+# The ones that could change your mind come first, and within those the ones
+# fewest of the other stays share — `microwave` is true of eleven of the thirty
+# Edinburgh flats and settles nothing, `adults_only` is true of one. Filter the
+# table and it re-ranks, because a trait they all share has stopped saying
+# anything about any of them.
+facts_traits = 8
 
 # Leading glyph per record status.
 [display.status_marks]

@@ -52,9 +52,10 @@ DEFAULTS = {
         # line per stay; "off" is columns only. There are `kind` and `traits`
         # columns too, for a table you'd rather keep one row per stay.
         "facts": "line",
-        # Traits are the long list, so the line takes the first few. Ordered by
-        # `facts_order` below, which is the only reason it isn't alphabetical.
-        "facts_traits": 6,
+        # An upper bound on the traits that line will name, not a target — the
+        # width of the terminal is what actually decides, since the line is
+        # fitted to it and never wraps.
+        "facts_traits": 8,
         "status_marks": {"ok": " ", "needs_price": "·", "blocked": "!"},
         "tax_marks": {"inclusive": "", "added": "+", "computed": "=",
                       "unknown": "?"},

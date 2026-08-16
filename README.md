@@ -480,14 +480,31 @@ so this needs no gazetteer and works the same in Bordeaux. It fits the museum to
 within 81 m from prose alone. It is a blunt instrument by design: it throws out
 claims wrong by a factor of three, and forgives everything else.
 
-Under each row `list` prints a line summarising all of it. `--no-facts` drops it
-for one run, `[display] facts = "off"` for good, and there are `kind` and
-`traits` columns if you would rather keep the table one row per stay.
+Under each row `list` prints one line of it — what kind of place it is, who
+sleeps where, the traits, and the nearest places the listing bothered to time:
 
 ```
    Calton Hill Apartment    1br 1ba  3  ≈7m  605 GBP=  101  90%  77  19.1
-    ↳ apartment · private bathroom, bath, hairdryer · from the prose: bathrooms, kind
+    ↳ apt · 1 full, 1 sofa · bath, private bathroom, hairdryer · 6m Waverley, 6m Playhouse
 ```
+
+One line, always, fitted to your terminal — a two-line row in a thirty-row table
+costs more than the second line is worth. What gets cut when it won't fit is the
+walks first, then the least distinguishing traits, and the tail says how many
+went.
+
+Which traits earn the room is decided per table rather than by a fixed order:
+the ones that could change your mind first, and within those the ones fewest of
+the other stays share. `microwave` is true of eleven of the thirty Edinburgh
+flats and settles nothing; `adults_only` is true of one. Filter the table and it
+re-ranks, because a trait they all share has stopped saying anything about any
+of them.
+
+Nothing on that line says which part of the page a fact came from. It all came
+off the same page, and flagging half of it would rank facts by their
+typesetting. `--no-facts` drops the line for one run, `[display] facts = "off"`
+for good, and there are `kind` and `traits` columns if you would rather keep the
+table one row per stay.
 
 ## How far is it, really
 
