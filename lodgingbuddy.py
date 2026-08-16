@@ -1139,7 +1139,10 @@ def confirm(rec: dict, candidates: list, rate: float | None) -> str:
         out.append("    type the right one on the next line")
     elif not amount:
         out.append("    no price — type the total on the next line")
-    elif rec.get("price_basis") == "indicative":
+    elif from_mark(rec, tax):
+        # Same predicate as the mark it names. Explaining a `~` that isn't on
+        # the line above is worse than saying nothing: it tells you the number
+        # is soft when the whole point of `=` is that this one isn't.
         out.append('    ~ is a "from" price, not a quote — type the real total'
                    " on the next line")
     return "\n".join(out)
