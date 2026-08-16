@@ -91,6 +91,13 @@ your dates, tax included, and authoritative over anything scraped. `quit`
 leaves, and so does Ctrl-D — or Ctrl-Z then enter on Windows, which is what
 end-of-file is there.
 
+Type the currency with it — `£582`, `$789`, `582 GBP` — whenever the page is
+showing you two of them. Booking.com quotes a US-signed-in booker in dollars
+and then names the pounds the property will actually charge, so both numbers
+are on the screen you're copying from and only you know which one you took. A
+bare number is filed under whatever the *site* was quoting in, which is right
+until the moment you copy the other one.
+
 A listing can still arrive as two pastes, where you don't have all of it at
 once. On Booking.com you usually will: the room block states its tax rates and
 any fee, so the checkout total is worked out for you at capture — see
@@ -228,6 +235,16 @@ dates — click through and `set` the real total. A price marked `=` never carri
 `~`: the sum was finished from the page's own rates, so it is what the checkout
 charges for the dates in the link, and hedging it would be a claim about it that
 isn't true.
+
+**One currency, or the table says so.** Every comparison assumes prices are in
+`currency.base`: `Share/nt` divides by nights and shares, `Value` divides by
+that, and the sort ranks what comes out. A single price filed under a different
+currency doesn't fail anywhere — it sorts as though a dollar were a pound, which
+buries the stay at the bottom of the table looking a third too expensive. So
+`list` says when it's holding more than one, names them, and points at `set <id>
+--currency`. `--rate` doesn't paper over it: it converts the column for display
+and deliberately leaves `Value` alone, so a mixed table stays flagged either
+way.
 
 ## Everything that isn't cost
 

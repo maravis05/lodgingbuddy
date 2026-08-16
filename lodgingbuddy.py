@@ -521,6 +521,11 @@ def cmd_list(args) -> int:
     # dropping `all_in` from `columns` doesn't also drop the note explaining
     # the 20% that is still inside every per-share figure below it.
     seen_tax = {tax for r in stays for amount, _, tax in [all_in(r)] if amount}
+    # On what's stored, not on what the column ends up printing: `--rate` puts
+    # one unit in the table while leaving Value dividing by the other, so a
+    # table that has gone mixed stays mixed however it's displayed.
+    seen_cur = {cur for r in stays
+                for amount, cur, _ in [all_in(r)] if amount and cur}
 
     def money(rec: dict) -> str:
         amount, cur, tax = all_in(rec)
@@ -551,17 +556,29 @@ def cmd_list(args) -> int:
     for row in rows:
         print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
 
-    footnotes(stays, marks, gates, seen_tax, rate)
+    footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
     return 0
 
 
-def footnotes(stays, marks, gates, seen_tax, rate) -> None:
+def footnotes(stays, marks, gates, seen_tax, seen_cur, rate) -> None:
     """What the table couldn't say in a column.
 
     Every mark in it gets explained here, and every explanation names the
     command that clears it — a glyph you have to go and look up is worse than
     no glyph.
     """
+    # First, and without a glyph, because it isn't a footnote to one number —
+    # it says the ordering of the whole table is arithmetic across two units.
+    # The currencies are already printed in the column, so there is nothing to
+    # go and look up.
+    if len(seen_cur) > 1:
+        print("\n" + textwrap.fill(
+            f"{' and '.join(sorted(seen_cur))} in one table — the share "
+            f"column, the sort and Value are all arithmetic across both, so "
+            f"the rows above are ordered against each other in units that "
+            f"don't match. `set <id> --currency {config.BASE_CURRENCY}` files "
+            f"a price under what it's actually in; `--rate` only converts the "
+            f"column for display, and doesn't reach Value.", width=76))
     # Same predicate as the column, so the note can't turn up explaining a mark
     # that isn't in the table above it.
     if any(from_mark(r, all_in(r)[2]) for r in stays):
@@ -1041,27 +1058,64 @@ def cmd_show(args) -> int:
 
 # ────────────────────────────── the prompt ─────────────────────────────────
 
-def as_number(text: str | None) -> float | None:
-    """A typed total, or None if that isn't what this is.
+# What a sign in front of a typed total means. Booking pages print the sign
+# rather than the code, so that is the form a copied price arrives in.
+CURRENCY_SIGNS = {"£": "GBP", "$": "USD", "€": "EUR"}
+
+
+def as_total(text: str | None) -> tuple[float | None, str | None]:
+    """A typed total and the currency it was typed in, or (None, None).
 
     Tolerates the shapes a price arrives in when you've just copied one off a
-    booking page: 1,234.50 and £480 are both numbers.
+    booking page: 1,234.50, £480 and 758.70 GBP are all totals.
+
+    The sign is the reason this returns two things rather than one. Booking.com
+    shows a US-signed-in booker dollars and then, on the same panel, names the
+    pounds the property will actually charge — so both numbers are in front of
+    you and only you know which one you copied. Filed under the wrong one, a
+    total doesn't look wrong. It looks cheap, and it sorts like it.
+
+    A bare number stays bare: it says nothing about its unit, so it doesn't get
+    to overrule what the site was quoting in. "It's dollars" and "nobody said"
+    are different claims and mustn't arrive here as the same one.
     """
-    text = (text or "").strip().replace(",", "").lstrip("£$€")
+    text = (text or "").strip().replace(",", "")
+    if not text:
+        return None, None
+
+    currency = None
+    for sign, code in CURRENCY_SIGNS.items():
+        if sign in text:
+            currency, text = code, text.replace(sign, "")
+    # "758.70 GBP" and "GBP 758.70" both get typed, so the code is taken from
+    # wherever in the line it turns up rather than from a fixed side of it.
+    rest = []
+    for word in text.split():
+        if len(word) == 3 and word.isalpha():
+            currency = word.upper()
+        else:
+            rest.append(word)
+
+    # What's left has to be the one word. Two numbers on a line is a sentence
+    # we haven't understood rather than a price, and running them together
+    # would answer it with a number nobody typed.
+    if len(rest) != 1:
+        return None, None
     try:
-        return float(text) if text else None
+        return float(rest[0]), currency
     except ValueError:
-        return None
+        return None, None
 
 
-def parse_entry(line: str) -> tuple[str, object, float | None] | None:
-    """Read one line of the prompt into (kind, payload, total), or None.
+def parse_entry(line: str) -> tuple[str, object, float | None, str | None] | None:
+    """Read one line of the prompt into (kind, payload, total, currency).
 
     Three things get pasted here and all of them are welcome: a bare URL, the
     raw JSON the bookmarklet puts on the clipboard, or a whole
     `... paste '{...}'` command line — which older builds of the bookmarklet
     copied, and which still arrives from anyone who typed it. Any of them may
-    be followed by a space and the total you're paying.
+    be followed by a space and the total you're paying, in whatever currency
+    you're reading it in.
     """
     line = line.strip()
     if not line:
@@ -1074,11 +1128,11 @@ def parse_entry(line: str) -> tuple[str, object, float | None] | None:
             obj, end = json.JSONDecoder().raw_decode(line)
         except json.JSONDecodeError:
             return None
-        return ("json", obj, as_number(line[end:]))
+        return ("json", obj, *as_total(line[end:]))
 
     if line.startswith("http"):
         url, _, tail = line.partition(" ")
-        return ("url", url, as_number(tail))
+        return ("url", url, *as_total(tail))
 
     # The bookmarklet's command line. shlex undoes its shell quoting, including
     # the '\'' dance it does for apostrophes in property names.
@@ -1090,23 +1144,31 @@ def parse_entry(line: str) -> tuple[str, object, float | None] | None:
         tail = " ".join(tokens[i + 1:])
         if token.startswith("{"):
             try:
-                return ("json", json.loads(token), as_number(tail))
+                return ("json", json.loads(token), *as_total(tail))
             except json.JSONDecodeError:
                 return None
         if token.startswith("http"):
-            return ("url", token, as_number(tail))
+            return ("url", token, *as_total(tail))
     return None
 
 
-def apply_total(rec: dict, total: float) -> None:
+def apply_total(rec: dict, total: float, currency: str | None = None) -> None:
     """Record a total typed at the prompt, and let it win.
 
     You typed it off the booking page, so it is the final number: quoted for
     these dates and with tax already in it. It also clears any scraped native
     price, which `all_in` would otherwise prefer — leaving that in place would
     show you a number you didn't type and can't account for.
+
+    The currency comes from the same place the number did — you — and only when
+    you gave one. Where you didn't, the site's own currency stands: it is a
+    guess about a figure you typed off a checkout page, but the alternative is a
+    price with no unit at all, and `list` says when a table has ended up holding
+    two of them.
     """
     rec["price"] = total
+    if currency:
+        rec["currency"] = currency
     rec["price_basis"] = "quoted"
     rec["tax_included"] = True
     rec["native_price"] = None
@@ -1168,20 +1230,21 @@ def attach_summary(key: str, text: str) -> tuple[str, int] | None:
     return rec.get("name") or "?", len(rec["summary"].split())
 
 
-def price_stored(key: str, total: float, rate: float | None) -> bool:
+def price_stored(key: str, total: float, currency: str | None,
+                 rate: float | None) -> bool:
     """Put a total onto the stay just captured, a line later than usual."""
     stays = load()
     rec = find_exact(stays, key)
     if rec is None:
         return False
-    apply_total(rec, total)
+    apply_total(rec, total, currency)
     save(stays)
     print(confirm(rec, [], rate))
     return True
 
 
 def capture_entry(kind: str, payload, total: float | None,
-                  rate: float | None) -> str | None:
+                  currency: str | None, rate: float | None) -> str | None:
     """Fold one pasted entry into the store and say what happened.
 
     Hands back the key of what it captured, so the lines after it — a total, a
@@ -1204,7 +1267,7 @@ def capture_entry(kind: str, payload, total: float | None,
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
     # After the merge, so a typed total beats anything the merge restored.
     if total is not None:
-        apply_total(rec, total)
+        apply_total(rec, total, currency)
     elif rec.get("price") or rec.get("native_price"):
         rec["status"] = sources.OK
     stays = [s for s in stays if key_of(s) != key_of(rec)]
@@ -1219,14 +1282,20 @@ PROMPT_HELP = """\
   Add a space and the total you're paying to record it:
 
       https://www.booking.com/Share-abc123 480
-      {"source":"booking.com",...} 582
+      {"source":"booking.com",...} £582
 
   A total typed here is taken as the final price, tax included. On its own
   line it does the same, to whatever you captured last — which is the usual
   way round, since the real total only shows up once you click through:
 
       {"source":"booking.com",...}
-      582
+      £582
+
+  Type its currency with it — £582, $789 or 582 GBP — whenever the page is
+  showing you two. Booking.com quotes a US-signed-in booker in dollars and
+  then names the pounds the property will charge; a bare number is filed
+  under whatever the site was quoting in, which is right until you copy the
+  other one.
 
   Anything else that isn't a command is filed as that stay's summary. The
   bookmarklet already brings the listing's write-up over, so this is for
@@ -1314,9 +1383,10 @@ def cmd_watch(args) -> int:
         # A bare total on its own line is the number you'd have put after the
         # link, typed a moment later — which is how it actually goes, since you
         # have to open the booking page to find out what it is.
-        if holding and (total := as_number(line)) is not None:
+        total, currency = as_total(line)
+        if holding and total is not None:
             settled()
-            if not price_stored(holding, total, rate):
+            if not price_stored(holding, total, currency, rate):
                 print("  the stay that was for isn't in this database any more")
                 holding = None
             continue
