@@ -1218,7 +1218,8 @@ PROMPT_HELP = """\
   `set <id> --look 4 --clean 5` marks the things no site can tell you.
   The prompt is named after the database you're capturing into. `db` lists
   them, `db <name>` moves to another, `db <name> --new` starts one.
-  Ctrl-D quits, Ctrl-C clears the line."""
+  `quit` leaves. Ctrl-C clears the line. Ctrl-D quits too, but only on
+  Linux and macOS — on Windows, end-of-file is Ctrl-Z then enter."""
 
 
 def cmd_watch(args) -> int:
@@ -1271,6 +1272,14 @@ def cmd_watch(args) -> int:
             continue
         if line in ("quit", "exit", "q"):
             settled()
+            return 0
+        # Ctrl-D is end-of-file on Linux and macOS, and input() raises above
+        # before we ever see it. The Windows console has no meaning for it and
+        # passes the character through, so it arrives as a line of its own
+        # instead — which nothing else here does. Take it for what it meant.
+        if line in ("\x04", "\x1a"):
+            settled()
+            print("  (not end-of-file on this platform — `quit` always works)")
             return 0
         if line in ("help", "h", "?"):
             settled()

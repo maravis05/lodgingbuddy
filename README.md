@@ -87,7 +87,9 @@ stays> list
 
 The total is optional — leave it off and the stay is captured with whatever the
 site gave up. A number typed here is taken as the **final** price: quoted for
-your dates, tax included, and authoritative over anything scraped. Ctrl-D quits.
+your dates, tax included, and authoritative over anything scraped. `quit`
+leaves, and so does Ctrl-D — or Ctrl-Z then enter on Windows, which is what
+end-of-file is there.
 
 A listing can still arrive as two pastes, where you don't have all of it at
 once. On Booking.com you usually will: the room block states its tax rates and
