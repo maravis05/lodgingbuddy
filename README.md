@@ -208,8 +208,13 @@ Two adjustments make prices from different sites comparable.
 **VAT.** UK consumer sites quote inclusive totals; Booking.com shows some
 bookers the ex-VAT figure and adds tax at checkout — a 20% gap that would put
 Booking flatteringly under everything else. Records carry `tax_included`, and
-`list` grosses up the ones flagged pre-tax (`+`). Where no site said either way
-the number is shown untouched and marked `?`, which is not the same claim.
+`list` finishes the sum on the ones flagged pre-tax — two ways, marked
+differently. Where the page stated its own rates, and any fee already inside
+the price, that is the arithmetic done and the figure is marked `=`; `show <id>`
+names the rates that went into it. Where it didn't, or stated something that
+doesn't add up, a flat VAT gross-up stands in and is marked `+`. Where no site
+said either way the number is shown untouched and marked `?`, which is not the
+same claim as either.
 
 **Nights and shares.** `Share/nt` is all-in ÷ nights ÷ shares, so a 2-night stay
 compares with a 4-night one. Shares are not heads: three people splitting a bill
