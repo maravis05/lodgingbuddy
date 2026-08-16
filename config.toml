@@ -312,6 +312,10 @@ source = "bookmarklet.js"
 output = "bookmarklet.txt"
 # Importable bookmark file, so you needn't copy 30-odd KB out of a terminal.
 bookmark_file = "bookmarklet.html"
+# Open this one and drag the link out of it. Kept separate from the file above
+# because that one has to stay strictly in the format importers parse, and this
+# one has to explain itself to somebody who has never installed a bookmarklet.
+install_page = "install-bookmarklet.html"
 title = "Grab this stay"
 # Past roughly this, some browsers refuse to store the bookmark.
 max_url_bytes = 60000

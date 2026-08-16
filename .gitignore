@@ -11,3 +11,4 @@ __pycache__/
 # Built from bookmarklet.js by build_bookmarklet.py. Generate these, don't clone them.
 bookmarklet.html
 bookmarklet.txt
+install-bookmarklet.html

@@ -505,34 +505,43 @@ will do:
 
 ```console
 $ python3 build_bookmarklet.py
-source    25,904 bytes
-stripped  18,342 bytes
-encoded   34,538 bytes  ->  bookmarklet.txt, bookmarklet.html
+source    26,346 bytes
+stripped  18,269 bytes
+encoded   34,399 bytes
+
+Wrote bookmarklet.txt, bookmarklet.html, install-bookmarklet.html
 ```
 
-`bookmarklet.html` is a bookmark file in the Netscape format every browser's
-importer speaks, holding the one bookmarklet. If you built it somewhere other
-than the machine you browse on, copy it across first. Then install it either way
-round:
+Three files, because installing a bookmarklet goes wrong in three different
+ways. If you built them somewhere other than the machine you browse on, copy
+them across first — they're a set, and the install page refers to the other two.
 
-- **Drag.** The format is also plain HTML, so opening the file in your browser
-  renders the link — drag **Grab this stay** onto your bookmarks bar.
-- **Import.** Every browser reads this format, under *Import bookmarks* or
-  *Import bookmarks and settings*: in Chrome and Edge via the bookmark
-  manager's ⋮ menu, in Firefox via *Bookmarks → Manage bookmarks → Import and
-  Backup*, in Safari via *File → Import From → Bookmarks HTML File*. Choose the
-  HTML-file option rather than the import-from-another-browser one.
+**Open `install-bookmarklet.html` in your browser and drag the button onto your
+bookmarks bar.** That's the whole install.
 
-Drag is the more reliable of the two, and the one to fall back on: it's an
-ordinary link, whereas some browsers have been known to drop `javascript:`
-bookmarklets on import.
+The one trap, and it's an easy one: drag *the button out of the opened page*,
+not the file out of your file manager. Dragging the file bookmarks the file —
+you get a link to `install-bookmarklet.html` on your bar, which does nothing on
+a listing. The page says so on itself, in case you meet this before you meet
+this paragraph.
 
-`bookmarklet.txt` holds the same thing as a bare URL if you would rather
-install it by hand: make a new bookmark and paste the file's contents into its
-**URL** field, not its name. It's 34 KB, so that is a fiddly thing to select
-out of a terminal — hence the bookmark file. Either way it has to go in via
-the bookmark editor, because most browsers strip `javascript:` pasted straight
-into the address bar.
+If dragging won't do — a locked-down bookmarks bar, a browser that won't accept
+the drop — there are two more routes, both also written on the page:
+
+- **Import `bookmarklet.html`.** It's the Netscape bookmark format every
+  browser's importer speaks, deliberately kept to nothing but what a parser
+  expects. Chrome and Edge: bookmark manager → ⋮ → *Import bookmarks*. Firefox:
+  *Manage bookmarks* → *Import and Backup*. Safari: *File* → *Import From*.
+  Choose the HTML-file option, not the import-from-another-browser one.
+- **Paste `bookmarklet.txt` by hand.** Same thing as a bare URL: make a new
+  bookmark and paste the file's contents into its **URL** field, not its name.
+  It's 34 KB, so it's a fiddly thing to select out of a terminal — which is why
+  the other two exist.
+
+Whichever route, it has to go in through the bookmark editor: browsers strip
+`javascript:` pasted straight into the address bar. Drag is the most reliable,
+since it's an ordinary link — some browsers have been known to drop
+`javascript:` bookmarklets on import.
 
 Rebuild after editing `bookmarklet.js`, and reinstall.
 

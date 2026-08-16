@@ -141,6 +141,7 @@ DEFAULTS = {
         "source": "bookmarklet.js",
         "output": "bookmarklet.txt",
         "bookmark_file": "bookmarklet.html",
+        "install_page": "install-bookmarklet.html",
         "title": "Grab this stay",
         "max_url_bytes": 60_000,
     },
@@ -251,5 +252,6 @@ SOURCES = CONFIG["source"]
 BOOKMARKLET_SRC = HERE / CONFIG["bookmarklet"]["source"]
 BOOKMARKLET_OUT = HERE / CONFIG["bookmarklet"]["output"]
 BOOKMARKLET_HTML = HERE / CONFIG["bookmarklet"]["bookmark_file"]
+BOOKMARKLET_INSTALL = HERE / CONFIG["bookmarklet"]["install_page"]
 BOOKMARKLET_TITLE = CONFIG["bookmarklet"]["title"]
 BOOKMARKLET_MAX_BYTES = CONFIG["bookmarklet"]["max_url_bytes"]
