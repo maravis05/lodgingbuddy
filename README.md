@@ -236,8 +236,11 @@ three would describe a payment nobody makes. Set `shares` in `config.toml`, or
 per stay with `set <id> --shares N`.
 
 Where a property's own price is known it beats the OTA's converted one, which
-has FX markup baked in. A "from" price is marked `~` and is not a quote for your
-dates — click through and `set` the real total. A price marked `=` never carries
+has FX markup baked in. On Booking.com that is the price of the room blocks the
+search results priced, added up — one block for a whole-property rental, and as
+many as it takes to fit the party at a hotel, where the number is the whole
+booking rather than one of its rooms. A "from" price is marked `~` and is not a
+quote for your dates — click through and `set` the real total. A price marked `=` never carries
 `~`: the sum was finished from the page's own rates, so it is what the checkout
 charges for the dates in the link, and hedging it would be a claim about it that
 isn't true.
@@ -396,10 +399,25 @@ getting two rooms is the same fact.
 Giving the stated count the last word is only worth anything if it is a count
 of one apartment, which is the other half of splitting the table above: a fused
 two is a stated count, and it answered the same question by the same route it
-was closed against. The room count gets narrowed to one on the same evidence —
-where the URL asked for two rooms, one block was priced, and the unit's own
-`Sleeps:` holds the whole party, you are being quoted one apartment, and
-recording two makes the record disagree with the price printed beside it.
+was closed against.
+
+`no_rooms` only ever gets the count started, because the search's question is
+not the booking's answer. What the URL also carries is the set of room blocks
+that were priced, and that set is what the record follows: as many rooms as
+there are blocks, at the sum of what they cost. Both directions come up. A
+hotel is the one where the count goes up and stays up — a room holds two and
+there are three of you, so two blocks are priced and the bill is both of them,
+which is the arithmetic a single-block read got half of. An apart-hotel is
+where it comes down: one block priced, and the unit's own `Sleeps:` holds the
+whole party, means you are being quoted one apartment and recording two makes
+the record disagree with the price printed beside it.
+
+Capacity travels with the count, where the blocks are the same block twice.
+Two rooms that hold two hold four, and left at two the record says a party of
+three doesn't fit and docks the stay for being cramped in a booking that has a
+bed spare. Two *different* rooms don't get the same treatment — the page was
+narrowed to the priced unit to read the layout at all, so doubling that one
+unit's capacity would be describing a room nobody read.
 
 A stay that fails is marked `✗` and kept — you captured it, so it stays
 captured. `list --viable` hides them. A stay we simply lack the data on is

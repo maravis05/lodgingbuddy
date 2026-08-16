@@ -345,6 +345,95 @@ const BOOKING_URL =
   "?checkin=2026-10-09&checkout=2026-10-12&group_adults=3&no_rooms=2" +
   "&sr_pri_blocks=1440389401_441029911_3_0_0__67324";
 
+// What sr_pri_blocks buys, and how many rooms that is. Hotels are the reason
+// this table exists: a whole-property rental is one block and its own capacity,
+// and every one of these cases is a way that stops being true once the search
+// has to ask for two rooms to fit the party.
+const BASE = "https://www.booking.com/hotel/gb/dalmahoy.html" +
+             "?checkin=2026-10-09&checkout=2026-10-12&group_adults=3";
+
+// Two room types, priced one apiece, so `pricedUnit` has a choice to get right
+// before the arithmetic below has anything to work on.
+const HOTEL_ROOMS =
+  "Classic Double Room\n1 queen bed\nMax. people: 2\n$134 per night\n" +
+  "$485 $402 Original price $485 Current price $402\n" +
+  "Excluded: 20 % VAT, 5 % City tax\n" +
+  "Superior Double Room with 2 Double Beds\n2 full beds\nMax. people: 4\n" +
+  "$197 per night\n$714 $591 Original price $714 Current price $591\n" +
+  "Excluded: 20 % VAT, 5 % City tax";
+
+const BLOCK_CASES = [
+  {
+    // The capture that started this: the same Classic Double twice, 296.66
+    // each, which is the $402 block the priced-unit read lands on. Taking the
+    // first alone halved the bill and left "2 rooms booked" over a one-room
+    // price. Capacity doubles with it — two rooms holding two hold four, and
+    // at two the party of three reads as not fitting.
+    name: "same block twice is two rooms, and two rooms' price",
+    url: BASE + "&no_rooms=2&sr_pri_blocks=" +
+         "3686523_95159595_2_2_0__29666%2C3686523_95159595_2_2_0__29666",
+    rooms: HOTEL_ROOMS,
+    want: { native_price: 593.32, rooms: 2, sleeps: 4 }
+  },
+  {
+    // Two different rooms still add up — the sum is the sum whatever is in it.
+    // Capacity doesn't: the page was narrowed to the cheaper unit long before
+    // this, so doubling its "Max. people" would be describing a room nobody
+    // read. It stays the one figure we actually have.
+    name: "two different blocks add up, but their capacity isn't guessed",
+    url: BASE + "&no_rooms=2&sr_pri_blocks=" +
+         "3686523_95159595_2_2_0__29666%2C3686523_95159599_4_2_0__43600",
+    rooms: HOTEL_ROOMS,
+    want: { native_price: 732.66, rooms: 2, sleeps: 2 }
+  },
+  {
+    // One block, and a unit that holds all three: the search asked for two
+    // rooms and was answered with one apartment, so the room count follows the
+    // price rather than the question.
+    name: "one block for a party that fits is one room",
+    url: BASE + "&no_rooms=2&sr_pri_blocks=1440389401_441029911_3_0_0__67324",
+    rooms: "Two-Bedroom Apartment\nMax. people: 3\nBedroom 1: 1 queen bed\n" +
+           "$295 per night\nCurrent price $1,013",
+    want: { native_price: 673.24, rooms: 1, sleeps: 3 }
+  },
+  {
+    // A four-figure minor-unit tail that works out at £4 is a supplement, not
+    // a stay. Checked per block, so one bad entry sinks the sum rather than
+    // being quietly averaged into it.
+    name: "a block too small to be a stay is not a price",
+    url: BASE + "&no_rooms=2&sr_pri_blocks=" +
+         "3686523_95159595_2_2_0__29666%2C3686523_95159595_2_2_0__400",
+    rooms: HOTEL_ROOMS,
+    want: { native_price: null, rooms: 2, sleeps: 2 }
+  },
+];
+
+function checkBlocks() {
+  let failed = 0;
+  for (const c of BLOCK_CASES) {
+    const rec = extract({
+      url: c.url, host: "www.booking.com", jsonld: [], next: null,
+      text: c.rooms, dom: { rooms: c.rooms }
+    });
+    const problems = [];
+    // `?? null` because a page with no usable block never sets native_price at
+    // all, and "the key isn't there" is the same answer as "no price" to
+    // everything downstream — the Python side only copies fields it is given.
+    for (const k of ["native_price", "rooms", "sleeps"]) {
+      const got = rec[k] ?? null;
+      if (got !== c.want[k]) problems.push(`${k}: got ${got}, want ${c.want[k]}`);
+    }
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
+
 // Through `extract` rather than against `pricedUnit` directly, because the
 // half that went wrong is the wiring: parseRooms was right about the text it
 // was handed and the text it was handed was four apartments at once.
@@ -468,9 +557,10 @@ function checkRooms() {
 
 const [, , path, url] = process.argv;
 if (!path && !url) {
-  const failed = checkRooms() + checkCharges() + checkSources() + checkUnits();
+  const failed = checkRooms() + checkCharges() + checkSources() + checkUnits() +
+                 checkBlocks();
   const total = CASES.length + CHARGE_CASES.length + SOURCE_CASES.length +
-                UNIT_CASES.length;
+                UNIT_CASES.length + BLOCK_CASES.length;
   console.log(failed ? `\n${failed} failed` : `\n${total} passed`);
   process.exit(failed ? 1 : 0);
 }

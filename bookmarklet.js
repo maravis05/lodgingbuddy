@@ -789,15 +789,15 @@
       if (charges.taxes) rec.taxes = charges.taxes;
       if (charges.fees_included) rec.fees_included = charges.fees_included;
 
-      // Booking.com encodes the selected block's price in sr_pri_blocks, as
+      // Booking.com encodes the selected blocks' prices in sr_pri_blocks, as
       // minor units on the end: ..._5_0_0__29363 means 293.63. That beats
       // scraping the rendered page, which shows many competing figures.
       //
-      // Which block that is, is the one the search results highlighted: the
-      // cheapest plan that clears your filters. Where a room offers several —
-      // non-refundable against free cancellation, say — the cheap one is the
-      // one taken, and cheapest is the only criterion this tool has. So the
-      // plan's terms are deliberately not recorded: they would be a column
+      // Which blocks those are, are the ones the search results highlighted:
+      // the cheapest plan that clears your filters. Where a room offers
+      // several — non-refundable against free cancellation, say — the cheap one
+      // is the one taken, and cheapest is the only criterion this tool has. So
+      // the plan's terms are deliberately not recorded: they would be a column
       // nothing sorts on, filled in by working out which listed price the
       // captured one is, which the page gives no way to do outright. Confirmed
       // on a two-plan page: $651 non-refundable against $723 refundable, and
@@ -808,33 +808,64 @@
       // screen and £758.70 at checkout, and only the second is that number
       // plus the stated taxes. Filing it as the display currency labelled a
       // pound figure as dollars and then let the table convert it again.
+      //
+      // The list is the whole set of blocks that one card was priced on, so it
+      // is summed. A hotel is where that finally showed up: a room holds two
+      // and there are three of you, so the search is no_rooms=2 and the card
+      // prices two rooms. Dalmahoy lists the same block twice at 296.66 —
+      // the $402 Classic Double taken twice, which is also the cheapest pair
+      // the page sells, since $402+$402 beats $402 plus the $440 that is the
+      // cheapest single-occupancy rate. Reading only the first block filed a
+      // three-night stay at 374 GBP all-in when the bill is 748, and printed
+      // "2 rooms booked" underneath a one-room price.
       var pri = /sr_pri_blocks=([^&]*)/.exec(ctx.url || "");
-      var blocks = pri ? (pri[1].match(/__\d+/g) || []) : [];
-      if (blocks.length) {
-        var amount = parseInt(blocks[0].slice(2), 10) / 100;
-        if (amount >= 10 && amount <= 100000) {
+      var listed = pri ? pri[1].replace(/%2C/gi, ",").split(",") : [];
+      var ids = [], minor = [], floor = Infinity, total = 0;
+      for (var bi = 0; bi < listed.length; bi++) {
+        var bm = /^(.+)__(\d+)$/.exec(listed[bi]);
+        if (!bm) continue;
+        ids.push(bm[1]);
+        minor.push(parseInt(bm[2], 10));
+        floor = Math.min(floor, parseInt(bm[2], 10));
+        total += parseInt(bm[2], 10);
+      }
+      if (ids.length) {
+        // Summed in minor units and divided once, so two rooms at 296.66 come
+        // to 593.32 rather than the 593.3199999999999 that adding the pounds
+        // gives you. The floor is checked per block and the ceiling against
+        // the sum: it is one room that has to be more than a supplement, and
+        // the whole booking that has to be less than absurd.
+        var amount = total / 100, cheapest = floor / 100;
+        if (cheapest >= 10 && amount <= 100000) {
           rec.native_price = amount;
-          // `no_rooms` is how many rooms the *search* asked for, and this is
-          // the price of one block: one room. Three adults searched as
-          // no_rooms=2 and landing on an apartment that sleeps three are
-          // quoted one apartment, and filing two rooms against a one-apartment
-          // price makes the record disagree with its own number and print
-          // "2 rooms booked" underneath it.
+          // How many rooms this price buys is how many blocks are in it, and
+          // that beats `no_rooms` — the search's question — because it is what
+          // the number in hand actually covers. A record whose room count and
+          // room price describe different bookings is the whole failure here.
           //
-          // Narrowed only, and only on both counts: one block priced, and a
-          // unit whose stated capacity actually holds the party. Where it
-          // doesn't — three of you in rooms that sleep two — the search asked
-          // for two rooms because it needs two, and the answer stands.
-          //
-          // A URL listing several blocks is a shape not seen yet, and whether
-          // the extra ids are more rooms or alternative plans decides both
-          // this and whether their prices should be added. So it changes
-          // nothing there: the search's room count and the first block's
-          // price, exactly as before.
-          if (blocks.length === 1 && rec.rooms > 1 &&
-              rec.sleeps && rec.adults && rec.sleeps >= rec.adults) {
+          // One block can still leave the search's answer wrong the other way:
+          // three adults searched as no_rooms=2 who land on an apartment that
+          // sleeps three are quoted one apartment, and filing two rooms
+          // against it would print "2 rooms booked" over a one-unit price. So
+          // a single block narrows, and only on both counts — one block
+          // priced, and a unit whose stated capacity holds the party.
+          if (ids.length > 1) {
+            rec.rooms = ids.length;
+          } else if (rec.rooms > 1 &&
+                     rec.sleeps && rec.adults && rec.sleeps >= rec.adults) {
             rec.rooms = 1;
           }
+          // Capacity is one unit's, and the booking is more than one unit.
+          // Two rooms that hold two hold four; left at two, the record says a
+          // party of three doesn't fit and loses points for being cramped in a
+          // booking that has a bed spare. Multiplied only where every block is
+          // the same block id — the same room taken twice, which is the one
+          // case where one unit's capacity answers for all of them. Two
+          // different rooms would need each one's own line read, and the page
+          // was narrowed to the priced unit long before this.
+          var same = true;
+          for (var si = 1; si < ids.length; si++) if (ids[si] !== ids[0]) same = false;
+          if (ids.length > 1 && same && rec.sleeps) rec.sleeps *= ids.length;
           // The property's country, off the URL, says which currency that is;
           // a fee quoted with a symbol says so outright and is believed first.
           rec.native_currency =
