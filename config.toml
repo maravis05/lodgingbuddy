@@ -115,15 +115,11 @@ title_width = 0
 # The rules cross the column seams rather than running over them.
 rule_every = 1
 
-# A bar beside Value, scaled to the best in the table. It says nothing the
-# number doesn't — it says it in a shape you can read without reading, which is
-# what the top of a sorted table is for.
-value_bars = true
-
 # auto | always | never. "auto" is on at a terminal and off down a pipe, so
 # `list > shortlist.txt` and `list | grep Leith` are the same characters they
 # always were. Nothing is said only by colour: it dims the write-up and the
-# units, and picks out the header and the first three rows. NO_COLOR in the
+# units, and picks out the header and, in the first three rows, the figure
+# they were sorted by. NO_COLOR in the
 # environment turns it off whatever this says.
 colour = "auto"
 

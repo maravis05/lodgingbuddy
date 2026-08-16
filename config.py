@@ -126,8 +126,6 @@ DEFAULTS = {
         "title_width": 0,
         # A rule between stays, every N of them. 0 draws none.
         "rule_every": 1,
-        # A bar beside Value, scaled to the best in the table.
-        "value_bars": True,
         # auto | always | never. "auto" is on at a terminal and off down a
         # pipe, so a redirected table is the same characters it always was.
         "colour": "auto",
@@ -496,7 +494,6 @@ def _bind() -> None:
         FACTS_LINES=CONFIG["display"]["facts_lines"],
         TITLE_WIDTH=CONFIG["display"]["title_width"],
         RULE_EVERY=CONFIG["display"]["rule_every"],
-        VALUE_BARS=CONFIG["display"]["value_bars"],
         COLOUR=CONFIG["display"]["colour"],
         LINKS=CONFIG["display"]["links"],
         STATUS_MARKS=CONFIG["display"]["status_marks"],

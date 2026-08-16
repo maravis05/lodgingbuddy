@@ -539,6 +539,16 @@ SORTS = {
     "name": lambda r, rate: ((r.get("name") or "").lower(),),
 }
 
+# Which column holds the figure a sort ordered the table by, where one does.
+# The top rows get it picked out, and picking out the wrong column would be
+# worse than picking out none — `--sort price` ranks on the all-in total, and
+# `--sort name` ranks on the thing already heading its own pane.
+SORT_COLUMN = {
+    "share": "share_nt", "pppn": "share_nt", "price": "all_in",
+    "score": "score", "sleeps": "slp", "walk": "walk", "points": "points",
+    "value": "value", "checkin": "checkin", "name": None,
+}
+
 
 def _pct(value: float | None) -> str:
     # Bare, because the "%" is in the unit row under the header. Thirty of them
@@ -994,10 +1004,10 @@ SEAM = "  " + VERT + "  "
 # Narrow enough to still name a place, wide enough to wrap prose into. Between
 # these the title column is whatever the terminal has spare.
 MIN_TITLE, MAX_TITLE = 28, 56
-# The value bar, and how many rows off the top are worth colouring. The bar
-# says nothing a column doesn't — it says it in a shape you can read without
-# reading, which is what the top of a sorted table is for.
-BAR, LEADERS = 8, 3
+# How many rows off the top are worth picking out. However you sorted it, the
+# answer is at the top, and a table you have to hunt the top of has wasted the
+# sorting.
+LEADERS = 3
 
 
 def _header(col: str) -> str:
@@ -1182,12 +1192,16 @@ def cmd_list(args) -> int:
     # stop, and costs one character each.
     groups = [COLUMNS[c][4] for c in chosen]
 
-    def pane(cells: list[str]) -> str:
+    def pane(cells: list[str], styles: list | None = None) -> str:
         out: list[str] = []
         for i, (cell, w, a) in enumerate(zip(cells, widths, align)):
             if i and groups[i] != groups[i - 1]:
                 out.append(VERT)
-            out.append(cell.rjust(w) if a == ">" else cell.ljust(w))
+            text = cell.rjust(w) if a == ">" else cell.ljust(w)
+            # After padding, never before: an escape sequence is no width on
+            # the screen and several characters to ljust, and the column would
+            # come out short by exactly as much as the styling cost.
+            out.append(styles[i](text) if styles and styles[i] else text)
         return config.COLUMN_GAP.join(out)
 
     marked = {key_of(r): leading_mark(r, gates[key_of(r)]) for r in stays}
@@ -1200,20 +1214,15 @@ def cmd_list(args) -> int:
     # left. So widening the window widens the only column that can use it,
     # rather than leaving a number in config.toml to guess at.
     pane_w = len(pane(heads))       # exact: the separators are in it too
-    bars = config.VALUE_BARS and "value" in chosen
     room = max(shutil.get_terminal_size((120, 24)).columns, 60)
     title_w = config.TITLE_WIDTH
     if not title_w:
-        title_w = room - lead_w - len(SEAM) - pane_w - (BAR + 2 if bars else 0)
-        # The bar is the one thing here that says nothing a column doesn't, so
-        # on a narrow terminal it is what gets spent to keep the title legible.
-        if title_w < MIN_TITLE and bars:
-            bars, title_w = False, room - lead_w - len(SEAM) - pane_w
-        title_w = max(MIN_TITLE, min(title_w, MAX_TITLE))
+        title_w = max(MIN_TITLE,
+                      min(room - lead_w - len(SEAM) - pane_w, MAX_TITLE))
 
     head = " " * lead_w + "Property".ljust(title_w) + SEAM + pane(heads)
     unit = " " * (lead_w + title_w) + SEAM + pane(units)
-    full = len(head) + (BAR + 2 if bars else 0)
+    full = len(head)
     # Where the verticals are, so a horizontal can cross them rather than run
     # over them. Read off the printed header rather than recomputed from the
     # widths, which is the version that can drift from what actually got drawn.
@@ -1230,18 +1239,17 @@ def cmd_list(args) -> int:
 
     facts = config.FACTS if not getattr(args, "no_facts", False) else "off"
     cap = config.FACTS_LINES        # 0 is "as many as it has something for"
-    best = max((marks[key_of(r)].value or 0) for r in stays)
+    # The few rows off the top are what you opened the table to find, so the
+    # figure they were sorted into this order by is the one that carries it.
+    # Costs no width, which the bar this replaced could not say for itself.
+    top = [LEAD if c == SORT_COLUMN.get(args.sort) else None for c in chosen]
     for place, rec in enumerate(stays, 1):
         title = squeeze(rec.get("name") or "?", titles, title_w, config.CITY or "")
         lead = f"{str(place).rjust(rank_w)} "
         if mark_w:
             lead += marked[key_of(rec)][:1] + " "
-        line = lead + title.ljust(title_w) + SEAM + pane(data[place - 1])
-        if bars:
-            filled = round(BAR * (marks[key_of(rec)].value or 0) / best) if best else 0
-            bar = "█" * filled + DIM("·" * (BAR - filled))
-            line += "  " + (LEAD(bar) if place <= LEADERS else bar)
-        print(line)
+        print(lead + title.ljust(title_w) + SEAM
+              + pane(data[place - 1], top if place <= LEADERS else None))
         if facts != "off":
             # "line" is what the place is; "lines" adds what's around it, which
             # is the other half of the question and worth the room to anyone
