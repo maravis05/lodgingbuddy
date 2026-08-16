@@ -139,7 +139,7 @@ Every command also works as a one-shot:
 $ python3 lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/Argyll-and-Bute-Kilbowie/...
 $ python3 lodgingbuddy.py set heather --price 582 --incl-tax --look 4
 $ python3 lodgingbuddy.py walk
-$ python3 lodgingbuddy.py list --sort value
+$ python3 lodgingbuddy.py list
    Property             Source       Space    Slp  Walk  All-in   Share/nt  Guest  Pts  Value
 ─────────────────────────────────────────────────────────────────────────────────────────────
    Heather Island View  sykes        2br 1ba  4    12m   582 GBP  97        —      17   4.4
@@ -148,7 +148,7 @@ $ python3 lodgingbuddy.py list --sort value
    Strathisla Oban      booking.com  2rm      3    9m    380 GBP  63        —      0    0
 
 ?  can't tell whether it clears a must-have — held back rather than ruled out:
-     Harbour View — unknown: 2 private bedrooms
+     Harbour View — unknown: a room each for 2 shares
 ```
 
 | command | |
@@ -167,7 +167,10 @@ $ python3 lodgingbuddy.py list --sort value
 `<id>` is a property code or part of a name — `1198632`, `heather`.
 
 `--sort` takes `share`, `price`, `score`, `sleeps`, `walk`, `points`, `value`,
-`checkin` or `name`. `--viable` hides anything that fails a must-have.
+`checkin` or `name`, and defaults to `value` — the question you opened the table
+to ask. Cheapest is a different question, and `--sort share` is still there for
+it. Change which one `list` opens on with `display.default_sort`. `--viable`
+hides anything that fails a must-have.
 
 ## More than one set of stays
 
@@ -287,7 +290,7 @@ overrides the site's cleanliness sub-score where there is one — you looked at
 the photos with your own standards in mind, and an aggregate of strangers
 didn't.
 
-**Who ends up on the sofa** is its own tier, `beds_outside_bedrooms`, scored
+**Who ends up on the sofa** is its own tier, `shares_without_a_door`, scored
 apart from `spare_beds` because they answer different questions: spare beds are
 elbow room, this is privacy, and no quantity of the first buys the second.
 Booking.com breaks its room block out room by room, which is the only place
@@ -304,13 +307,23 @@ Bathrooms: 2
 Both sleep three. Only one of them puts everybody behind a door, and a bed list
 that says "1 queen, 1 bunk" against "1 full, 1 sofa" barely hints at it. The
 room labels come over with the beds, so `show` prints `Bedroom 1: 1 queen ·
-Bedroom 2: 1 bunk`, and the count of beds outside a bedroom scores: 0 is worth
-10 points, 1 is worth 3.
+Bedroom 2: 1 bunk`.
 
-A site that never broke the beds out room by room leaves this **unscored**
-rather than scoring zero — an unread layout must not read as a place where
-everyone gets a door. It shows up in `show`'s `no data:` tail, as everything
-unmeasured does.
+What scores is **shares left over when the bedrooms run out**, not beds outside
+a bedroom. The two sound alike and part company on a flat with two bedrooms
+*and* a sofa bed: counting beds, that sofa costs it points nobody is going to
+sleep on. So the rooms that shut are dealt out to shares best-first — the couple
+and the singleton take a bedroom each while there are bedrooms — and whoever is
+left is on the sofa. None left over is worth 25 points, one is worth 6. It is
+the heaviest tier in the table, being the thing most likely to decide the trip,
+and it is still only points: a sofa bed is a worse stay, not a disqualified one.
+Where nobody has to sleep in a room with somebody they didn't come with is a
+must-have, and lives [below](#must-haves).
+
+A site that never broke the beds out room by room falls back to a stated bedroom
+count, and a stay with neither is left **unscored** rather than scoring zero —
+an unread layout must not read as a place where everyone gets a door. It shows
+up in `show`'s `no data:` tail, as everything unmeasured does.
 
 An apart-hotel lists every apartment type in the one table — four suites, two
 rate plans each — and read whole that table describes no apartment that exists.
@@ -347,28 +360,40 @@ Gates, not preferences — no amount of hot tub buys back a bedroom that isn't
 there. They live in `[filters]`:
 
 ```toml
-private_bedroom_per_share = true
+room_per_share = true
 max_walk_minutes = 0     # 0 = don't gate on it
 require = []             # e.g. ["parking", "wifi"]
 ```
 
-`private_bedroom_per_share` is measured in shares, not heads, reusing the same
-idea as the split: a couple is one share and one bedroom, a singleton is one
-share and one bedroom. Three of you sharing two ways needs two bedrooms. A
-hotel booking satisfies it with rooms instead.
+`room_per_share` is measured in shares, not heads, reusing the same idea as the
+split: a couple is one share and one room, a singleton is one share and one
+room. Three of you sharing two ways needs two rooms. A hotel booking satisfies
+it with two hotel rooms.
 
-A bedroom count the site actually stated wins outright here. It used to be
-taken as the larger of that and the room count — but on Booking.com the room
-count comes off the URL's `no_rooms`, which says how many rooms your *search*
-asked for. A one-bedroom apartment turned up by a two-room search cleared a
-two-bedroom must-have on the strength of the question rather than the answer.
-Where no bedroom count is known, the room count is still the fallback, which
-is what keeps hotels working.
+A **room**, not a bedroom. The line a stay can't cross is two shares sleeping in
+the same room, whatever is in it — a room with two beds in it is one room, and
+that is the arrangement no score buys back. One bedroom plus a sofa bed in the
+living room is two rooms and clears this, then loses 19 of the 25 points that
+`shares_without_a_door` is worth. A bedroom each is the thing you want; being
+told which of two flats has one is what the score is for, and being stopped from
+booking the one where somebody sleeps in a stranger's room is what the gate is
+for. They are different jobs and this used to do only the first, disqualifying
+nine of twenty Edinburgh flats that were perfectly bookable.
+
+A room-by-room bed list settles it outright: where a site publishes one it is
+complete, so a layout without a living-room bed hasn't got one. Failing that, a
+stated bedroom count is short of the whole answer — it says how many rooms shut,
+not how many there are — so a one-bedroom flat with no layout comes back
+**unknown** rather than failed. There may be a sofa bed nobody wrote down, and
+that is a reason to go and look rather than to decide. Last of all comes the
+room count, which on Booking.com is the URL's `no_rooms` and says how many rooms
+your *search* asked for; it stands for a hotel, where asking for two rooms and
+getting two rooms is the same fact.
 
 Giving the stated count the last word is only worth anything if it is a count
 of one apartment, which is the other half of splitting the table above: a fused
-two is a stated count, and it cleared the same gate by the same route it was
-closed against. The room count gets narrowed to one on the same evidence —
+two is a stated count, and it answered the same question by the same route it
+was closed against. The room count gets narrowed to one on the same evidence —
 where the URL asked for two rooms, one block was priced, and the unit's own
 `Sleeps:` holds the whole party, you are being quoted one apartment, and
 recording two makes the record disagree with the price printed beside it.
@@ -382,7 +407,7 @@ marked `?` and held back rather than ruled out, which is not the same claim:
      Heather Island View — needs hot_tub
 
 ?  can't tell whether it clears a must-have — held back rather than ruled out:
-     Harbour View — unknown: 2 private bedrooms
+     Harbour View — unknown: a room each for 2 shares
 ```
 
 ## How far is it, really
@@ -391,11 +416,12 @@ Coordinates tell a human nothing. The only location question anyone actually
 asks is whether you have to drive, so `walk` stores minutes on foot and the
 table never shows a distance.
 
-Name the places you want to be near in `config.toml`. This is the part you
-rewrite per trip — it's what makes the tool work for Edinburgh as well as Oban:
+Name the places you want to be near in `config.toml`. This is the part that
+makes the tool work for Edinburgh as well as Oban:
 
 ```toml
 [[destination]]
+db = "stays"                                    # optional, see below
 label = "Oban town centre"
 address = "George Street, Oban PA34 5NX, UK"
 weight = 0.6
@@ -403,6 +429,21 @@ weight = 0.6
 
 `weight` is that destination's share of the average the walk tier scores; they
 need not sum to anything.
+
+`db` names the [database](#more-than-one-set-of-stays) a destination belongs to,
+for a trip with two legs still being decided between. Rewriting the list per
+trip works right up until both trips are open at once: point the Oban weights at
+Edinburgh and every stay already measured is silently re-weighted, which is a
+worse answer than no answer. So Oban's destinations carry `db = "stays"` and
+Edinburgh's carry `db = "edinbruh"`, in one file, and `walk` measures against
+whichever leg you're standing in. Leave `db` off and the destination counts
+everywhere — which is what a one-leg trip wants, and needs nothing said.
+
+Two close-together destinations are one destination wearing a disguise. Edinburgh
+started with a third, Princes Street, which sits 300 m from both of the others: a
+basket like that measures one thing while looking like it measures several. What
+these two measure is the walk into the Old Town, which for a three-night city
+stay is the question.
 
 **This one makes a network call, and it's on out of the box.** `walk` is the
 only command that tells anyone where the places you're considering are: it sends

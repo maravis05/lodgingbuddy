@@ -207,16 +207,23 @@ def describe_beds(beds: list | None) -> str:
     return " · ".join(f"{room}: {', '.join(items)}" for room, items in by_room.items())
 
 
-def beds_outside_bedrooms(beds: list | None) -> int | None:
-    """How many beds are not behind a bedroom door. None if nobody said.
+def sleeping_rooms(beds: list | None) -> tuple[int, int] | None:
+    """(rooms with a bed in them, how many of those shut). None if nobody said.
 
-    A sofa bed in the living room sleeps the same number as a double and
-    settles nothing about who gets privacy, so it is worth counting on its own
-    rather than being folded into a total.
+    Rooms rather than beds, because rooms are what a party divides into. Two
+    people who didn't come together can't take one room between them however
+    many beds are in it, and one of them can take the living room sofa however
+    few — so a bed count answers neither question and a room count answers
+    both. `count` is deliberately ignored here for that reason.
     """
     if not beds or not any(b.get("room") for b in beds):
         return None
-    return sum(b.get("count", 1) for b in beds if not b.get("private"))
+    shut = {}
+    for bed in beds:
+        room = bed.get("room")
+        if room:
+            shut[room] = shut.get(room, False) or bool(bed.get("private"))
+    return len(shut), sum(1 for private in shut.values() if private)
 
 
 def apply_site(rec: dict, site: dict) -> None:

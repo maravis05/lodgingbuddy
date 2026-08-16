@@ -114,21 +114,61 @@ def spare_beds(rec: dict) -> float | None:
     return float(sleeps - heads)
 
 
-def beds_outside_bedrooms(rec: dict) -> float | None:
-    """Beds not behind a bedroom door — the sofa bed in the lounge.
+def shares_of(rec: dict) -> int | None:
+    """How many ways this stay divides — into payers, and into sleepers.
 
-    Scored apart from spare_beds because they answer different questions.
-    Spare beds are elbow room; this is privacy, and no amount of the first
-    buys the second. Two places that both "sleep 3" are not the same offer
-    when one of them puts the third person in the living room.
+    Read fresh from config every time rather than stamped onto the record at
+    capture, so editing config.toml re-costs and re-scores the whole list. A
+    stay that splits differently from the rest of the trip carries its own
+    `shares`.
+    """
+    return rec.get("shares") or config.SHARES
 
-    None, not zero, when the site never broke the beds out room by room —
-    an unread layout must not read as a place where everyone gets a door.
+
+def rooms_to_sleep_in(rec: dict) -> tuple[int | None, int | None]:
+    """(rooms with a bed in them, how many of those shut), for this stay.
+
+    Two sources, and they are not equally good. A room-by-room bed list is the
+    site telling us the layout, and where there is one it is complete — a
+    living room with a sofa bed in it is in that list, so a layout without one
+    hasn't got one. Failing that, a stated bedroom count says how many rooms
+    shut but nothing about how many there are in total, which is why the second
+    half of the answer comes back alone.
+
+    `rooms` is last and is the search's `no_rooms`, not the property's: it says
+    how many rooms were *asked* for. It stands only for a hotel booking, where
+    asking for two rooms and getting two rooms is the same fact.
     """
     import sources  # local, for the same reason complaints() does it
 
-    count = sources.beds_outside_bedrooms(rec.get("beds"))
-    return None if count is None else float(count)
+    counted = sources.sleeping_rooms(rec.get("beds"))
+    if counted:
+        return counted
+    stated = rec.get("bedrooms") or rec.get("rooms")
+    return None, stated or None
+
+
+def shares_without_a_door(rec: dict) -> float | None:
+    """How many shares don't get a bedroom to themselves.
+
+    The rooms that shut are handed out first, because that is how anyone would
+    do it — the couple and the singleton take a bedroom each while there are
+    bedrooms — and whoever is left is on the sofa in the living room.
+
+    Which is a worse stay, not a disqualifying one. It is scored rather than
+    gated for exactly that reason: a sofa bed is a real answer to where the
+    third person sleeps, just the answer you'd rather not have, and it should
+    cost points instead of the argument. What isn't an answer is two shares in
+    one room — see `gates`, which is where that lives.
+
+    None, not zero, when nothing said how many rooms shut: an unread layout
+    must not read as a place where everyone gets a door.
+    """
+    shares = shares_of(rec)
+    _, shut = rooms_to_sleep_in(rec)
+    if not shares or shut is None:
+        return None
+    return float(max(0, shares - shut))
 
 
 def walk_minutes(rec: dict) -> float | None:
@@ -137,10 +177,13 @@ def walk_minutes(rec: dict) -> float | None:
     Weighted over the destinations we actually measured, not all of them, so one
     lookup that failed doesn't quietly drag the average toward zero.
     """
+    import database  # local, for the same reason complaints() imports sources
+
     measured = rec.get("walk_minutes") or {}
     if not measured:
         return None
-    weights = {d["label"]: d.get("weight", 1.0) for d in config.DESTINATIONS}
+    weights = {d["label"]: d.get("weight", 1.0)
+               for d in config.destinations_for(database.current())}
     total_w = total = 0.0
     for label, minutes in measured.items():
         w = weights.get(label, 1.0)
@@ -158,7 +201,7 @@ FACTORS = {
     "cleanliness": cleanliness,
     "look": look,
     "spare_beds": spare_beds,
-    "beds_outside_bedrooms": beds_outside_bedrooms,
+    "shares_without_a_door": shares_without_a_door,
 }
 
 
@@ -269,34 +312,33 @@ def evaluate(rec: dict, share_per_night: float | None = None) -> Breakdown:
 
 # ──────────────────────────────── hard gates ───────────────────────────────
 
-def gates(rec: dict, shares: int | None) -> list[tuple[str, str]]:
+def gates(rec: dict) -> list[tuple[str, str]]:
     """Must-haves this stay fails, as (what, "fail" | "unknown").
 
     Separate from scoring on purpose. A gate is not a preference you can
-    out-score: no amount of hot tub buys back a bedroom that doesn't exist.
+    out-score: no amount of hot tub buys back a room that doesn't exist.
 
     "unknown" is not "fail". A stay we simply lack the data on is held back for
     you to check rather than ruled out on our own missing homework.
     """
     out: list[tuple[str, str]] = []
 
-    if config.REQUIRE_PRIVATE_BEDROOMS and shares:
-        # Shares are sleeping units — a couple is one, a singleton is one — so a
-        # bedroom per share is exactly "nobody shares a room with someone they
-        # didn't come with". A hotel booking satisfies it with rooms instead.
-        #
-        # A known bedroom count wins outright rather than being max()'d against
-        # `rooms`, which comes off the URL's no_rooms and says how many rooms
-        # the *search* asked for. A one-bedroom apartment found by a two-room
-        # search passed this gate on the strength of the question, not the
-        # answer.
-        rooms = rec.get("bedrooms")
-        if rooms is None:
-            rooms = rec.get("rooms") or 0
-        if not rooms:
-            out.append((f"{shares} private bedrooms", "unknown"))
-        elif rooms < shares:
-            out.append((f"{shares} private bedrooms, has {rooms}", "fail"))
+    shares = shares_of(rec)
+    if config.REQUIRE_ROOM_PER_SHARE and shares:
+        # A room each, not a *bedroom* each. Shares are sleeping units — a
+        # couple is one, a singleton is one — and the line that can't be
+        # crossed is two of them in the same room, whatever is in it: a room
+        # with two beds in it is one room. Whether the room shuts is a
+        # different question, worth points rather than a veto, and asked in
+        # `shares_without_a_door`.
+        total, shut = rooms_to_sleep_in(rec)
+        if total is not None and total < shares:
+            out.append((f"a room each for {shares} shares, has {total}", "fail"))
+        elif total is None and (shut or 0) < shares:
+            # No layout, so nothing rules out a sofa bed we were never told
+            # about. A stated bedroom count short of the party is a reason to
+            # go and look, not a reason to decide.
+            out.append((f"a room each for {shares} shares", "unknown"))
 
     if config.MAX_WALK_MINUTES:
         mins = walk_minutes(rec)

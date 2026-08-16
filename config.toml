@@ -48,7 +48,11 @@ label = "share"
 
 
 [display]
-default_sort = "share"
+# Which of the sorts `list` opens on: value, share, price, score, points,
+# sleeps, walk, checkin, name. Value is points per unit of cost, which is the
+# question you opened the table to ask — cheapest is a different one, and
+# `list --sort share` is still there for it.
+default_sort = "value"
 # Which columns `list` prints, and in what order. Pick from: name, source,
 # where, checkin, nts, slp, space, all_in, share_nt, score, reviews, clean,
 # look, walk, points, value. All of them at once is wider than a terminal, and
@@ -165,19 +169,26 @@ steps = [
   { min = 1, points = 5 },
 ]
 
-# Beds not behind a bedroom door — the sofa bed in the living room. Booking.com
-# breaks its room block out room by room ("Bedroom 1: 1 queen bed", "Living
-# room: 1 sofa bed"), which is the only place this is legible. Scored apart
-# from spare_beds because they are different questions: that one is elbow room,
-# this one is privacy, and no quantity of the first buys the second.
+# Who ends up on the sofa. Bedrooms are handed out to shares best-first, and
+# this is how many shares the bedrooms ran out before — 0 for a couple and a
+# singleton with two bedrooms, 1 when there is one bedroom and a sofa bed in
+# the living room. Booking.com breaks its room block out room by room
+# ("Bedroom 1: 1 queen bed", "Living room: 1 sofa bed"), which is the only
+# place this is legible; a bare bedroom count answers it too.
+#
+# Scored apart from spare_beds because they are different questions: that one
+# is elbow room, this one is privacy, and no quantity of the first buys the
+# second. Worth a lot, because it is the thing most likely to decide the trip
+# — but points, not a veto. A sofa bed is a real answer to where the third
+# person sleeps. Two shares in one room is not, and that is a must-have below.
 #
 # A stay whose site never said stays unscored here rather than scoring zero —
 # an unread layout mustn't read as a place where everyone gets a door.
-[scoring.tiers.beds_outside_bedrooms]
+[scoring.tiers.shares_without_a_door]
 direction = "lower"
 steps = [
-  { max = 0, points = 10 },   # everyone behind a door
-  { max = 1, points = 3 },    # one of you is on the sofa
+  { max = 0, points = 25 },   # a bedroom each
+  { max = 1, points = 6 },    # one of you is on the sofa bed
 ]
 
 # Flat points for a fact being true. Amenity names are the canonical slugs in
@@ -198,10 +209,16 @@ fireplace = 3
 # there. A stay that fails one is kept and marked, never dropped.
 
 [filters]
-# Nobody shares a bedroom with someone they didn't come with. Measured in
-# shares, not heads: two shares means two bedrooms, whether that's a couple
-# plus a singleton or two singletons. A hotel booking satisfies it with rooms.
-private_bedroom_per_share = true
+# Nobody sleeps in the same room as someone they didn't come with. Measured in
+# shares, not heads: two shares means two rooms, whether that's a couple plus a
+# singleton or two singletons. A room with two beds in it is one room, and a
+# hotel booking satisfies this with two hotel rooms.
+#
+# A *bedroom* each is not this gate — it's `scoring.tiers.shares_without_a_door`
+# above, and worth 25 points. One bedroom plus a sofa bed in the living room
+# clears the must-have and loses most of those points, which is the difference
+# between a stay you'd rather not book and a stay you can't.
+room_per_share = true
 # 0 means don't gate on it — the walk still scores, it just can't rule
 # anything out.
 max_walk_minutes = 0
@@ -211,10 +228,15 @@ require = []
 
 # ── Where you want to be ──────────────────────────────────────────────────
 #
-# `walk` measures minutes on foot from each stay to each of these. Rewrite the
-# list per trip — this is what makes the tool work for Edinburgh as well as
-# Oban. `weight` is that destination's share of the average the walk tier
-# scores; they need not sum to anything.
+# `walk` measures minutes on foot from each stay to each of these. `weight` is
+# that destination's share of the average the walk tier scores; they need not
+# sum to anything.
+#
+# `db` says which database a destination belongs to, for a trip with two legs
+# still in play — the Oban stays are measured against Oban and the Edinburgh
+# ones against Edinburgh, in one config, with neither leg's numbers moving when
+# you work on the other. Leave `db` off and the destination counts everywhere,
+# which is what a one-leg trip wants and needs nothing said.
 
 [maps]
 # READ THIS ONE. `walk` sends each stay's coordinates or address, and the
@@ -268,11 +290,13 @@ mode = "walking"
 # doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
 # beach. Coordinates win where both are present.
 [[destination]]
+db = "stays"
 label = "Oban town centre"
 address = "George Street, Oban PA34 5NX, UK"
 weight = 0.6
 
 [[destination]]
+db = "stays"
 label = "Ferry terminal"
 # The postal address doesn't geocode — Nominatim has no "Railway Pier" in Oban
 # and returns nothing at all for it. The pin does.
@@ -281,9 +305,31 @@ longitude = -5.4766190
 weight = 0.25
 
 [[destination]]
+db = "stays"
 label = "Oban Distillery"
 address = "Oban Distillery, Stafford Street, Oban PA34 5NH, UK"
 weight = 0.15
+
+# Edinburgh. Two destinations rather than three, because the third would have
+# been Princes Street and it is 300 m from both of these — a basket of places
+# that close measures one thing while looking like it measures several. What it
+# measures is the walk into the Old Town, which for a three-night city stay is
+# the question. Coordinates rather than addresses: both are pedestrianised
+# stretches Nominatim resolves to one end or the other.
+[[destination]]
+db = "edinbruh"
+label = "Royal Mile"
+# St Giles', the middle of the Mile rather than either end of it.
+latitude = 55.9495
+longitude = -3.1906
+weight = 0.6
+
+[[destination]]
+db = "edinbruh"
+label = "Edinburgh Waverley"
+latitude = 55.9520
+longitude = -3.1892
+weight = 0.4
 
 
 # Sites, tried in the order listed. `domain` is matched against the URL host and

@@ -40,7 +40,7 @@ DEFAULTS = {
         "native_default": "GBP",
     },
     "display": {
-        "default_sort": "share",
+        "default_sort": "value",
         "column_gap": "  ",
         "rule_char": "─",
         "name_width": 30,
@@ -87,11 +87,11 @@ DEFAULTS = {
                 {"min": 2, "points": 8},
                 {"min": 1, "points": 5},
             ]},
-            # Beds not behind a bedroom door. Privacy, which spare_beds — a
-            # measure of elbow room — cannot stand in for.
-            "beds_outside_bedrooms": {"direction": "lower", "steps": [
-                {"max": 0, "points": 10},
-                {"max": 1, "points": 3},
+            # Shares that don't get a bedroom to themselves. Privacy, which
+            # spare_beds — a measure of elbow room — cannot stand in for.
+            "shares_without_a_door": {"direction": "lower", "steps": [
+                {"max": 0, "points": 25},
+                {"max": 1, "points": 6},
             ]},
         },
         "bonuses": {
@@ -102,7 +102,7 @@ DEFAULTS = {
     # Gates, not preferences. A stay that fails one is kept and marked, never
     # dropped — you captured it, so it stays captured.
     "filters": {
-        "private_bedroom_per_share": True,
+        "room_per_share": True,
         "max_walk_minutes": 0,
         "require": [],
     },
@@ -235,7 +235,7 @@ TIERS = CONFIG["scoring"]["tiers"]
 BONUSES = CONFIG["scoring"]["bonuses"]
 
 # hard filters
-REQUIRE_PRIVATE_BEDROOMS = CONFIG["filters"]["private_bedroom_per_share"]
+REQUIRE_ROOM_PER_SHARE = CONFIG["filters"]["room_per_share"]
 MAX_WALK_MINUTES = CONFIG["filters"]["max_walk_minutes"] or None
 REQUIRED_AMENITIES = CONFIG["filters"]["require"]
 
@@ -251,6 +251,19 @@ MAPS_KEY_ENV = CONFIG["maps"]["api_key_env"]
 MAPS_HOST = CONFIG["maps"]["host"]
 MAPS_MODE = CONFIG["maps"]["mode"]
 DESTINATIONS = CONFIG["destination"]
+
+
+def destinations_for(db: str) -> list[dict]:
+    """The places worth walking to, for the database you're working in.
+
+    A trip with two legs in play at once is two sets of destinations, and one
+    global list can't hold both: point the Oban weights at Edinburgh and every
+    stay you already measured is silently re-weighted, which is a worse answer
+    than no answer. So a `[[destination]]` may name the database it belongs to,
+    and one that names none belongs to all of them — the arrangement a single-
+    trip config already has, unchanged and still needing nothing said.
+    """
+    return [d for d in DESTINATIONS if d.get("db") in (None, db)]
 
 # sites, in the order they're tried
 SOURCES = CONFIG["source"]

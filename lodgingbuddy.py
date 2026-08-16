@@ -271,11 +271,12 @@ def per_share_total(rec: dict, rate: float | None = None) -> float | None:
 def shares_of(rec: dict) -> int | None:
     """How many ways this stay's bill divides.
 
-    Read fresh from config every time rather than stamped onto the record at
-    capture, so editing config.toml re-costs the whole list. A stay that splits
-    differently from the rest of the trip carries its own `shares`.
+    Lives in `scoring` now that the same number decides who gets a bedroom as
+    well as who pays for it, and one definition is the point: a party that
+    splits three ways for the bill and two ways for the beds is a party this
+    tool would describe wrongly twice.
     """
-    return rec.get("shares") or config.SHARES
+    return scoring.shares_of(rec)
 
 
 def heads_of(rec: dict) -> int | None:
@@ -303,7 +304,7 @@ def scored(rec: dict) -> scoring.Breakdown:
 
 
 def ruled_out(rec: dict) -> list[tuple[str, str]]:
-    return scoring.gates(rec, shares_of(rec))
+    return scoring.gates(rec)
 
 
 def weekday(iso: str | None) -> str:
@@ -690,10 +691,15 @@ def cmd_walk(args) -> int:
         print(exc, file=sys.stderr)
         return 1
 
-    if not config.DESTINATIONS:
-        print("No destinations in config.toml, so there's nothing to measure "
-              "against.\nAdd a [[destination]] with a label and an address.",
-              file=sys.stderr)
+    # The current database's destinations, so a config holding two legs at once
+    # measures the Edinburgh stays against Edinburgh and leaves Oban alone.
+    wanted = config.destinations_for(database.current())
+    if not wanted:
+        elsewhere = " (the ones in it name other databases)" if config.DESTINATIONS else ""
+        print(f"No destinations for {database.current()} in config.toml{elsewhere}, "
+              f"so there's nothing to measure against.\nAdd a [[destination]] "
+              f"with a label and an address, and `db = \"{database.current()}\"` "
+              f"if it belongs to this leg alone.", file=sys.stderr)
         return 1
 
     stays = load()
@@ -719,7 +725,7 @@ def cmd_walk(args) -> int:
                       f"add one with `set {key_of(rec)} --address '…'`")
                 continue
             try:
-                minutes, problems = proximity.walk_times(origin, config.DESTINATIONS)
+                minutes, problems = proximity.walk_times(origin, wanted)
             except proximity.Unlocatable:
                 # One stay the geocoder couldn't place. Every other stay still
                 # can be, so this is a skip and a tally, not the end of the run.
