@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
 
-# Your captured stays — real dates, prices and plans. Track this only if you
-# mean to publish the trip.
-stays.json
+# Your captured stays — real dates, prices and plans, in however many databases
+# you keep them in. Track these only if you mean to publish the trip.
+*.json
+
+# Which database `db` last left you in.
+.lodgingbuddy-db
+
+# Built from bookmarklet.js by build_bookmarklet.py. Generate these, don't clone them.
+bookmarklet.html
+bookmarklet.txt

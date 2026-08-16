@@ -14,10 +14,15 @@ and sorts them however you like.
     ./lodgingbuddy.py list --sort share
     ./lodgingbuddy.py refresh
 
+Run it with no arguments for a prompt that holds open across a browsing
+session. `db` keeps more than one set of stays apart, since a trip you're
+booking and a pile of examples shouldn't share a table.
+
 Sites: Booking.com, Sykes Cottages, cottages.com, Hoseasons.
 
-Settings — where the store lives, the VAT rate, the currency pair, the table's
-shape, which domains route where — are in config.toml.
+Settings — where the store lives, which also names the default database and
+the folder the rest sit in; the VAT rate; the currency pair; the table's
+shape; which domains route where — are in config.toml.
 """
 
 from __future__ import annotations
@@ -27,21 +32,29 @@ import datetime as dt
 import json
 import shlex
 import sys
+import textwrap
 
 import config
+import database
+import proximity
+import scoring
 import sources
 
 
 # ──────────────────────────────── storage ──────────────────────────────────
 
 def load() -> list[dict]:
-    if not config.STORE.exists():
+    # Asked for on every read rather than resolved once at import, so that
+    # switching databases at the prompt takes effect on the next line rather
+    # than the next process.
+    path = database.path()
+    if not path.exists():
         return []
-    return json.loads(config.STORE.read_text())
+    return json.loads(path.read_text())
 
 
 def save(stays: list[dict]) -> None:
-    config.STORE.write_text(json.dumps(stays, indent=2) + "\n")
+    database.path().write_text(json.dumps(stays, indent=2) + "\n")
 
 
 def key_of(rec: dict) -> str:
@@ -179,6 +192,25 @@ def heads_of(rec: dict) -> int | None:
     return rec.get("adults") or rec.get("sleeps")
 
 
+def scored(rec: dict) -> scoring.Breakdown:
+    """This stay's desirability and its value ratio.
+
+    Recomputed on every read rather than stored, for the same reason `shares_of`
+    reads config fresh: editing the weights in config.toml has to re-rank the
+    whole list, not just whatever gets captured next.
+
+    Deliberately blind to `--rate`. Value is a property of the stay, and asking
+    to see the table in dollars must not change it — converting every stay by
+    the same factor leaves the ranking alone but silently moves every number,
+    which reads like the stays changed.
+    """
+    return scoring.evaluate(rec, per_share_night(rec))
+
+
+def ruled_out(rec: dict) -> list[tuple[str, str]]:
+    return scoring.gates(rec, shares_of(rec))
+
+
 def weekday(iso: str | None) -> str:
     if not iso:
         return ""
@@ -255,10 +287,16 @@ def cmd_set(args) -> int:
         return 1
     for field in ("price", "nights", "adults", "rooms", "note", "currency",
                   "score", "native_price", "native_currency", "offer",
-                  "shares", "bedrooms", "bathrooms", "sleeps"):
+                  "shares", "bedrooms", "bathrooms", "sleeps",
+                  "score_scale", "look", "clean", "address", "summary"):
         val = getattr(args, field, None)
         if val is not None:
             rec[field] = val
+    if args.amenities is not None:
+        # Replaces rather than adds: correcting a scrape usually means the list
+        # was wrong, not short, and "how do I remove one" should not need a flag.
+        rec["amenities"] = sources.normalise_amenities(
+            [a for a in args.amenities.split(",") if a.strip()]) or None
     if args.price is not None or args.native_price is not None:
         rec["price_basis"] = "quoted"
     if args.incl_tax:
@@ -277,6 +315,10 @@ def cmd_set(args) -> int:
         vat = rec.get("vat_rate") or config.VAT_RATE
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
         print(f"  all-in {amount:,.2f} {cur}{tail}")
+    mark = scored(rec)
+    if mark.points:
+        value = f", value {mark.value:g}" if mark.value is not None else ""
+        print(f"  {mark.points:g} points{value}")
     return 0
 
 
@@ -286,49 +328,127 @@ SORTS = {
     # config.toml both still work.
     "pppn": lambda r, rate: (per_share_night(r, rate) is None, per_share_night(r, rate) or 0),
     "price": lambda r, rate: (r.get("price") is None, r.get("price") or 0),
-    "score": lambda r, rate: (r.get("score") is None, -(r.get("score") or 0)),
+    # On the normalised percentage, never the raw number. Sorting those put a
+    # 4.8-out-of-5 below a 9.0-out-of-10.
+    "score": lambda r, rate: (scoring.guest_score(r) is None, -(scoring.guest_score(r) or 0)),
     "sleeps": lambda r, rate: (r.get("sleeps") is None, -(r.get("sleeps") or 0)),
+    "walk": lambda r, rate: (scoring.walk_minutes(r) is None, scoring.walk_minutes(r) or 0),
+    "points": lambda r, rate: (-scored(r).points,),
+    # What you're really asking when you open this table: which of these gives
+    # me the most of what I want per pound.
+    "value": lambda r, rate: (scored(r).value is None, -(scored(r).value or 0)),
     "checkin": lambda r, rate: (r.get("checkin") or "9999",),
     "name": lambda r, rate: ((r.get("name") or "").lower(),),
 }
 
 
+def _pct(value: float | None) -> str:
+    return f"{value:.0f}%" if value is not None else "—"
+
+
+# Each column as (header, how to render one row). Which of them `list` prints,
+# and in what order, is `columns` in config.toml — the table got wide enough
+# that "all of them" stopped being a sensible default for every trip.
+COLUMNS = {
+    "name":     ("Property", lambda r, ctx: (r.get("name") or "?")[:config.NAME_WIDTH]),
+    "source":   ("Source", lambda r, ctx: (r.get("source") or "")[:config.SOURCE_WIDTH]),
+    "where":    ("Where", lambda r, ctx: (r.get("location") or r.get("region") or "")[:config.WHERE_WIDTH]),
+    "checkin":  ("Check-in", lambda r, ctx: f"{r['checkin']} {weekday(r['checkin'])}" if r.get("checkin") else ""),
+    "nts":      ("Nts", lambda r, ctx: str(r.get("nights") or "")),
+    "slp":      ("Slp", lambda r, ctx: str(r.get("sleeps") or r.get("adults") or "")),
+    "space":    ("Space", lambda r, ctx: " ".join(
+                    x for x in (f"{r['bedrooms']}br" if r.get("bedrooms") else
+                                (f"{r['rooms']}rm" if r.get("rooms") else None),
+                                f"{r['bathrooms']:g}ba" if r.get("bathrooms") else None) if x)),
+    "all_in":   ("All-in", lambda r, ctx: ctx["money"](r)),
+    "share_nt": (None, lambda r, ctx: (f"{per_share_night(r, ctx['rate']):,.0f}"
+                                       if per_share_night(r, ctx["rate"]) else "—")),
+    # Normalised, so one column can hold a 5-star site and a 10-point one.
+    "score":    ("Guest", lambda r, ctx: _pct(scoring.guest_score(r))),
+    "reviews":  ("Revs", lambda r, ctx: str(r.get("reviews") or "—")),
+    "clean":    ("Clean", lambda r, ctx: _pct(scoring.cleanliness(r))),
+    "look":     ("Look", lambda r, ctx: _pct(scoring.look(r))),
+    "walk":     ("Walk", lambda r, ctx: (f"{scoring.walk_minutes(r):.0f}m"
+                                         if scoring.walk_minutes(r) is not None else "—")),
+    "points":   ("Pts", lambda r, ctx: f"{ctx['score'](r).points:g}"),
+    "value":    ("Value", lambda r, ctx: (f"{ctx['score'](r).value:g}"
+                                          if ctx["score"](r).value is not None else "—")),
+}
+
+
+def leading_mark(rec: dict, gates: list[tuple[str, str]]) -> str:
+    """The glyph in front of a row.
+
+    A must-have it fails outranks everything: a place with too few bedrooms is
+    out whether or not we also need a price for it. But a page we couldn't
+    fetch outranks a gate we merely can't judge yet, because that one names
+    something you can go and do about it.
+    """
+    if any(verdict == "fail" for _, verdict in gates):
+        return config.GATE_MARKS.get("fail", "x")
+    if rec.get("status") != sources.OK:
+        return config.STATUS_MARKS.get(rec.get("status"), " ")
+    if gates:
+        return config.GATE_MARKS.get("unknown", "?")
+    return config.STATUS_MARKS.get(sources.OK, " ")
+
+
 def cmd_list(args) -> int:
+    # `list` is where you go to see what you've got, so it's the right place to
+    # be told you're looking at a different set than usual. Silent in the normal
+    # case, because a banner on every run is a banner nobody reads.
+    if database.current() != config.DEFAULT_DB:
+        print(f"Showing {database.current()}, not {config.DEFAULT_DB}. "
+              f"`db {config.DEFAULT_DB}` switches back.\n")
+
     stays = load()
     if not stays:
         print("Nothing captured yet.\n  ./lodgingbuddy.py add <url>")
         return 0
 
     rate = args.rate
+    # Scored once per stay and reused: three columns and the sort all ask, and
+    # the answer can't change underneath them mid-table.
+    marks = {key_of(r): scored(r) for r in stays}
+    gates = {key_of(r): ruled_out(r) for r in stays}
+
+    if getattr(args, "viable", False):
+        stays = [r for r in stays
+                 if not any(v == "fail" for _, v in gates[key_of(r)])]
+        if not stays:
+            print("Everything captured fails a must-have in [filters]. "
+                  "`list` without --viable shows them and why.")
+            return 0
+
     stays.sort(key=lambda r: SORTS[args.sort](r, rate))
 
-    rows = []
-    seen_tax = set()
-    for rec in stays:
+    # Collected over the stays rather than as the price column renders, so that
+    # dropping `all_in` from `columns` doesn't also drop the note explaining
+    # the 20% that is still inside every per-share figure below it.
+    seen_tax = {tax for r in stays for amount, _, tax in [all_in(r)] if amount}
+
+    def money(rec: dict) -> str:
         amount, cur, tax = all_in(rec)
         amount, cur = converted(amount, cur, rate)
-        psn = per_share_night(rec, rate)
-        if amount:
-            seen_tax.add(tax)
-        rows.append([
-            config.STATUS_MARKS.get(rec.get("status"), " "),
-            (rec.get("name") or "?")[:config.NAME_WIDTH],
-            (rec.get("source") or "")[:config.SOURCE_WIDTH],
-            (rec.get("location") or rec.get("region") or "")[:config.WHERE_WIDTH],
-            f"{rec['checkin']} {weekday(rec['checkin'])}" if rec.get("checkin") else "",
-            str(rec.get("nights") or ""),
-            str(rec.get("sleeps") or rec.get("adults") or ""),
-            (("~" if rec.get("price_basis") == "indicative" else "")
-             + f"{amount:,.0f} {cur}".strip()
-             + config.TAX_MARKS.get(tax, "")) if amount else "—",
-            f"{psn:,.0f}" if psn else "—",
-            f"{rec['score']:g}" if rec.get("score") else "—",
-        ])
+        if not amount:
+            return "—"
+        return (("~" if rec.get("price_basis") == "indicative" else "")
+                + f"{amount:,.0f} {cur}".strip() + config.TAX_MARKS.get(tax, ""))
 
+    ctx = {"rate": rate, "money": money, "score": lambda r: marks[key_of(r)]}
+
+    chosen = [c for c in config.COLUMNS if c in COLUMNS]
+    if unknown := [c for c in config.COLUMNS if c not in COLUMNS]:
+        print(f"{config.PATH}: no such column {', '.join(unknown)} — "
+              f"have: {', '.join(COLUMNS)}", file=sys.stderr)
+
+    rows = [[leading_mark(rec, gates[key_of(rec)])]
+            + [COLUMNS[c][1](rec, ctx) for c in chosen] for rec in stays]
     # The per-share column is the one you compare on, so it says whose money it
     # is — a bare "P/p/nt" invited the assumption that it was split three ways.
-    headers = ["", "Property", "Source", "Where", "Check-in", "Nts",
-               "Slp", "All-in", f"{config.SHARE_LABEL.title()}/nt", "Score"]
+    headers = [""] + [COLUMNS[c][0] or f"{config.SHARE_LABEL.title()}/nt"
+                      for c in chosen]
+
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
     sep = config.COLUMN_GAP
     print(sep.join(h.ljust(w) for h, w in zip(headers, widths)))
@@ -336,6 +456,17 @@ def cmd_list(args) -> int:
     for row in rows:
         print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
 
+    footnotes(stays, marks, gates, seen_tax, rate)
+    return 0
+
+
+def footnotes(stays, marks, gates, seen_tax, rate) -> None:
+    """What the table couldn't say in a column.
+
+    Every mark in it gets explained here, and every explanation names the
+    command that clears it — a glyph you have to go and look up is worse than
+    no glyph.
+    """
     if any(r.get("price_basis") == "indicative" for r in stays):
         print("\n~  a \"from\" price, not a quote for these dates — click through "
               "and set the real total with `set <id> --price`.")
@@ -348,10 +479,42 @@ def cmd_list(args) -> int:
     if rate:
         print(f"{config.BASE_CURRENCY} converted at {rate} "
               f"{config.QUOTE_CURRENCY}/{config.BASE_CURRENCY}.")
+
+    def with_verdict(verdict: str) -> list[tuple[dict, list]]:
+        return [(r, gates[key_of(r)]) for r in stays
+                if any(v == verdict for _, v in gates[key_of(r)])]
+
+    failed = with_verdict("fail")
+    failed_keys = {key_of(r) for r, _ in failed}
+    # A stay that already fails something outright is listed once, under the
+    # failure — being also unsure about a second gate changes nothing.
+    unsure = [(r, gs) for r, gs in with_verdict("unknown")
+              if key_of(r) not in failed_keys]
+    if failed:
+        print(f"\n{config.GATE_MARKS.get('fail', 'x')}  fails a must-have, so no "
+              f"score can buy it back:")
+        for rec, gs in failed:
+            why = "; ".join(w for w, v in gs if v == "fail")
+            print(f"     {rec.get('name') or '?'} — needs {why}")
+    if unsure:
+        print(f"\n{config.GATE_MARKS.get('unknown', '?')}  can't tell whether it "
+              f"clears a must-have — held back rather than ruled out:")
+        for rec, gs in unsure:
+            why = "; ".join(w for w, v in gs if v == "unknown")
+            print(f"     {rec.get('name') or '?'} — unknown: {why}")
+
+    # Points resting on absent data are the one number here that can quietly
+    # mislead: a place nobody has reviewed scores like a place everybody
+    # disliked, and only this line tells them apart.
+    thin = [(r, marks[key_of(r)]) for r in stays if marks[key_of(r)].unknown]
+    if thin:
+        print("\n   scored on partial data — these factors had no number:")
+        for rec, mark in thin:
+            print(f"     {rec.get('name') or '?'} — {', '.join(mark.unknown)}")
+
     pending = [r["name"] for r in stays if r.get("status") != sources.OK]
     if pending:
-        print(f"·/! needs a price: {', '.join(p or '?' for p in pending)}")
-    return 0
+        print(f"\n·/! needs a price: {', '.join(p or '?' for p in pending)}")
 
 
 def cmd_refresh(args) -> int:
@@ -367,9 +530,18 @@ def cmd_refresh(args) -> int:
         except (ValueError, OSError) as exc:
             print(f"  {rec['name']}: {exc}")
             continue
-        # Keep anything typed by hand; only fill gaps and refresh price.
+        # Keep anything typed by hand; only fill gaps and refresh price. The
+        # price is the one field a re-fetch is allowed to overwrite — except
+        # with a "from" price over a total you confirmed, which turned £582
+        # back into the £1090 the listing advertises.
+        confirmed = rec.get("price_basis") == "quoted"
+        soft = fresh.get("price_basis") != "quoted"
         for field, value in fresh.items():
-            if value is not None and (rec.get(field) is None or field == "price"):
+            if value is None:
+                continue
+            if rec.get(field) is None:
+                rec[field] = value
+            elif field == "price" and not (confirmed and soft):
                 rec[field] = value
         stays[i] = rec
         # Report what the *fetch* did, not whether a price happens to be on
@@ -382,6 +554,71 @@ def cmd_refresh(args) -> int:
             print(f"  {rec['name']}: {got}")
     save(stays)
     print(f"Refreshed {changed} of {len(stays)}.")
+    return 0
+
+
+def cmd_walk(args) -> int:
+    """Measure how long it takes to walk from each stay to the places you named.
+
+    One call per stay rather than per destination, because the routing service
+    takes a list — and because the bill is per element either way.
+    """
+    if not config.DESTINATIONS:
+        print("No destinations in config.toml, so there's nothing to measure "
+              "against.\nAdd a [[destination]] with a label and an address.",
+              file=sys.stderr)
+        return 1
+
+    stays = load()
+    if args.id:
+        one = find(stays, args.id)
+        if not one:
+            print(f"No stay matching {args.id!r}", file=sys.stderr)
+            return 1
+        targets = [one]
+    else:
+        targets = stays
+
+    done = already = unlocatable = 0
+    try:
+        for rec in targets:
+            if rec.get("walk_minutes") and not args.again:
+                already += 1
+                continue
+            origin = proximity.origin_of(rec)
+            if not origin:
+                unlocatable += 1
+                print(f"  {rec.get('name') or '?'}: nothing to measure from — "
+                      f"add one with `set {key_of(rec)} --address '…'`")
+                continue
+            try:
+                minutes, problems = proximity.walk_times(origin, config.DESTINATIONS)
+            except OSError as exc:
+                print(f"  {rec.get('name') or '?'}: {exc}")
+                continue
+
+            # Merged, not replaced: a destination this run couldn't reach keeps
+            # whatever an earlier run learned about it.
+            rec["walk_minutes"] = {**(rec.get("walk_minutes") or {}), **minutes}
+            done += 1
+            print(f"  {rec.get('name') or '?'}: {proximity.describe(rec)}")
+            for problem in problems:
+                print(f"    {problem}")
+    except (proximity.NoKey, proximity.MapsError) as exc:
+        # Whatever was measured before the service refused us is still worth
+        # keeping, so this saves on the way out rather than discarding the run.
+        save(stays)
+        print(exc, file=sys.stderr)
+        return 1
+
+    save(stays)
+    tail = []
+    if already:
+        tail.append(f"{already} already measured (`walk --again` redoes them)")
+    if unlocatable:
+        tail.append(f"{unlocatable} with no address or coordinates")
+    print(f"Measured {done} of {len(targets)}."
+          + (f" Skipped {', '.join(tail)}." if tail else ""))
     return 0
 
 
@@ -449,6 +686,12 @@ def record_from_payload(incoming: dict) -> tuple[dict | None, list, str | None]:
         if field in rec and value is not None:
             rec[field] = value
 
+    # The bookmarklet sends amenities in the site's own words — "Free WiFi",
+    # "Parking on site" — because the alias table belongs in one language, not
+    # kept in step across two.
+    if isinstance(rec.get("amenities"), list):
+        rec["amenities"] = sources.normalise_amenities(rec["amenities"]) or None
+
     if not (rec["name"] or rec["code"]):
         # Search and region pages parse fine but describe no single property.
         return None, candidates, ("That page doesn't identify one property — it "
@@ -458,6 +701,62 @@ def record_from_payload(incoming: dict) -> tuple[dict | None, list, str | None]:
     rec["captured_at"] = dt.datetime.now().isoformat(timespec="seconds")
     rec["status"] = sources.OK if rec["price"] else sources.NEEDS_PRICE
     return rec, candidates, None
+
+
+def tally(name: str) -> str:
+    n = database.count(name)
+    if n is None:
+        return "not readable"
+    return "1 stay" if n == 1 else f"{n} stays"
+
+
+def cmd_db(args) -> int:
+    """Which set of stays we're working in, and how to be in a different one.
+
+    Switching is sticky, so the flag you'd otherwise type on every capture is
+    typed once. The cost of that is a mode you can forget you're in, which is
+    why both branches here end by naming the way back.
+    """
+    if args.name:
+        try:
+            name = database.name_of(args.name)
+            if args.new:
+                database.start(name)
+            elif not database.path_of(name).exists():
+                print(f"No database called {name}. There is: "
+                      f"{', '.join(database.names())}.\n"
+                      f"  `db {name} --new` starts one.", file=sys.stderr)
+                return 1
+            was = database.current()
+            database.use(name)
+        except (ValueError, OSError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+
+        back = f" `db {was}` goes back to {tally(was)}." if was != name else ""
+        print(f"{'Started and now in' if args.new else 'Now in'} {name} — "
+              f"{tally(name)}.{back}")
+        # The pointer moved, but this run didn't. Saying so beats letting the
+        # next command look like it ignored you. On stdout, and after the line
+        # it qualifies — a caveat that turns up first reads as a failure.
+        if pinned := database.forced():
+            print(f"  {database.ENV}={pinned} is set though, so that's what "
+                  f"still gets read until you unset it.")
+        return 0
+
+    if args.new:
+        print("`db <name> --new` needs a name.", file=sys.stderr)
+        return 1
+
+    here = database.current()
+    width = max(len(n) for n in database.names())
+    for name in database.names():
+        pinned = database.ENV if name == here and database.forced() else ""
+        print(f"{'→' if name == here else ' '} {name.ljust(width)}  {tally(name)}"
+              + (f"   ({pinned}, for this run only)" if pinned else ""))
+    print(f"\nIn {config.STORE_DIR}. `db <name>` switches and remembers it; "
+          f"`db <name> --new` starts one.")
+    return 0
 
 
 def cmd_rm(args) -> int:
@@ -515,11 +814,26 @@ def describe(rec: dict, rate: float | None = None) -> str:
     row("Party", ", ".join(p for p in party if p))
     shape = [f"sleeps {rec['sleeps']}" if rec.get("sleeps") else None,
              f"{rec['bedrooms']} bed" if rec.get("bedrooms") else None,
-             f"{rec['bathrooms']} bath" if rec.get("bathrooms") else None]
+             f"{rec['bathrooms']} bath" if rec.get("bathrooms") else None,
+             f"{rec['rooms_total']} rooms" if rec.get("rooms_total") else None]
     row("Property", ", ".join(s for s in shape if s))
+    # The bed list, spelled out, because "sleeps 4" counts a sofa bed the same
+    # as a double behind a door and only one of those settles an argument.
+    row("Beds", sources.describe_beds(rec.get("beds")))
+    row("Has", ", ".join(rec.get("amenities") or []))
+    row("Walk", proximity.describe(rec))
     if rec.get("score"):
         n = f" from {rec['reviews']} reviews" if rec.get("reviews") else ""
-        row("Score", f"{rec['score']:g}{n}")
+        pct = scoring.guest_score(rec)
+        scale = f"/{scoring.scale_of(rec):g}" if scoring.scale_of(rec) else ""
+        as_pct = f"  = {pct:.0f}%" if pct is not None else \
+            "  — scale unknown, so it can't be compared with other sites"
+        row("Score", f"{rec['score']:g}{scale}{n}{as_pct}")
+    for name, value in (rec.get("subscores") or {}).items():
+        row("", f"{name} {value:g}")
+    marks = [f"look {rec['look']}/5" if rec.get("look") else None,
+             f"clean {rec['clean']}/5" if rec.get("clean") else None]
+    row("Yours", ", ".join(m for m in marks if m))
     row("Offer", rec.get("offer"))
 
     if rec.get("price"):
@@ -556,9 +870,40 @@ def describe(rec: dict, rate: float | None = None) -> str:
         row(f"{label.title()}/nt", f"— no nights on file; set with "
                                    f"`set {key_of(rec)} --nights N`")
 
+    # Points last, and never as a bare number. A composite you can't take apart
+    # is one you end up trusting or ignoring wholesale, and neither is useful.
+    mark = scored(rec)
+    if mark.points or mark.unknown:
+        row("Points", f"{mark.points:g}   {mark.summary()}")
+    if mark.value is not None:
+        # Always shown against the unconverted figure, because that is what it
+        # was computed from — quoting it against a converted one would be
+        # arithmetic that doesn't check out.
+        base = per_share_night(rec)
+        _, base_cur, _ = all_in(rec)
+        row("Value", f"{mark.value:g}   = {mark.points:g} points / "
+                     f"({base:,.0f} {base_cur} per {label} a night / "
+                     f"{config.PRICE_UNIT})")
+
+    for what, verdict in ruled_out(rec):
+        row("Must-have", f"{what} — "
+            + ("not met" if verdict == "fail" else "can't tell from what we hold"))
+
     row("Note", rec.get("note"))
     row("Status", rec.get("status"))
     row("Captured", rec.get("captured_at"))
+
+    # Last, and wrapped rather than in the label column, because it's the one
+    # field with no fixed width — a paragraph squeezed into a two-column layout
+    # takes the whole block down with it.
+    if rec.get("summary"):
+        lines.append("")
+        lines.append("  Summary")
+        for para in rec["summary"].split("\n"):
+            lines.append(textwrap.fill(para, width=76, initial_indent="    ",
+                                       subsequent_indent="    ")
+                         if para.strip() else "")
+
     if rate:
         lines.append("")
         lines.append(f"  {config.BASE_CURRENCY} converted at {rate} "
@@ -672,28 +1017,66 @@ def confirm(rec: dict, candidates: list, rate: float | None) -> str:
     elif not amount and candidates:
         out.append("    couldn't tell which amount is the total. Candidates: "
                    + ", ".join(f"{c:g}" for c in candidates))
+        out.append("    type the right one on the next line")
     elif not amount:
-        out.append("    no price — paste it again with the total after a space")
+        out.append("    no price — type the total on the next line")
     elif rec.get("price_basis") == "indicative":
-        out.append('    ~ is a "from" price, not a quote — paste again with the'
-                   " total after a space")
+        out.append('    ~ is a "from" price, not a quote — type the real total'
+                   " on the next line")
     return "\n".join(out)
 
 
-def capture_entry(kind: str, payload, total: float | None, rate: float | None) -> None:
-    """Fold one pasted entry into the store and say what happened."""
+def attach_summary(key: str, text: str) -> tuple[str, int] | None:
+    """Add the listing's own words to a stay we already hold.
+
+    Appended, not replaced: a description copied out of a browser arrives as
+    however many lines the terminal decided to send it in, and each of them
+    reaches us as a separate paste. `set <id> --summary` is the one that
+    replaces, for when the text itself was wrong rather than short.
+
+    Returns (name, words so far), or None if that stay has gone — which it has
+    if you changed database between capturing it and pasting this.
+    """
+    stays = load()
+    rec = find_exact(stays, key)
+    if rec is None:
+        return None
+    rec["summary"] = ((rec.get("summary") or "") + "\n" + text).strip()
+    save(stays)
+    return rec.get("name") or "?", len(rec["summary"].split())
+
+
+def price_stored(key: str, total: float, rate: float | None) -> bool:
+    """Put a total onto the stay just captured, a line later than usual."""
+    stays = load()
+    rec = find_exact(stays, key)
+    if rec is None:
+        return False
+    apply_total(rec, total)
+    save(stays)
+    print(confirm(rec, [], rate))
+    return True
+
+
+def capture_entry(kind: str, payload, total: float | None,
+                  rate: float | None) -> str | None:
+    """Fold one pasted entry into the store and say what happened.
+
+    Hands back the key of what it captured, so the lines after it — a total, a
+    summary — know what they're about.
+    """
     candidates: list = []
     if kind == "url":
         try:
             rec = sources.capture(payload)
         except (ValueError, OSError) as exc:
             print(f"  {exc}")
-            return
+            return None
     else:
         rec, candidates, problem = record_from_payload(dict(payload))
         if problem:
             print(f"  {problem}")
-            return
+            return None
 
     stays = load()
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
@@ -706,6 +1089,7 @@ def capture_entry(kind: str, payload, total: float | None, rate: float | None) -
     stays.append(rec)
     save(stays)
     print(confirm(rec, candidates, rate))
+    return key_of(rec)
 
 
 PROMPT_HELP = """\
@@ -715,8 +1099,23 @@ PROMPT_HELP = """\
       https://www.booking.com/Share-abc123 480
       ./lodgingbuddy.py paste '{...}' 582
 
-  A total typed here is taken as the final price, tax included.
-  Anything else runs as a command — list, show, set, rm, refresh.
+  A total typed here is taken as the final price, tax included. On its own
+  line it does the same, to whatever you captured last — which is the usual
+  way round, since the real total only shows up once you click through:
+
+      ./lodgingbuddy.py paste '{...}'
+      582
+
+  Anything else that isn't a command is filed as that stay's summary. The
+  bookmarklet already brings the listing's write-up over, so this is for
+  topping it up — a site whose markup moved, or the paragraph a page keeps
+  behind a "read more". It appends: blank line when you've finished, and
+  `set <id> --summary "..."` replaces instead.
+
+  Commands: add, paste, list, show, set, walk, refresh, rm, db.
+  `set <id> --look 4 --clean 5` marks the things no site can tell you.
+  The prompt is named after the database you're capturing into. `db` lists
+  them, `db <name>` moves to another, `db <name> --new` starts one.
   Ctrl-D quits, Ctrl-C clears the line."""
 
 
@@ -729,11 +1128,33 @@ def cmd_watch(args) -> int:
 
     # Bare `./lodgingbuddy.py` parses no subcommand, so there is no --rate.
     rate = getattr(args, "rate", None) or config.DEFAULT_RATE
-    stays = load()
-    print(f"lodgingbuddy — {len(stays)} stays on file. `help` for what this takes.")
+    print(f"lodgingbuddy — {tally(database.current())} in "
+          f"{database.current()}. `help` for what this takes.")
+
+    # What the lines after a capture are about. One listing arrives as three
+    # separate pastes — the bookmarklet's output, the total off the booking
+    # page, the write-up — and only the first of them names the property.
+    holding: str | None = None
+    pending: tuple[str, int] | None = None
+
+    def settled() -> None:
+        """Say what a run of pasted prose came to, once it stops arriving.
+
+        Held back rather than printed per line, because the terminal decides
+        how many lines a pasted paragraph is and a receipt for each of them
+        would bury the thing you were reading.
+        """
+        nonlocal pending
+        if pending:
+            print(f"  + summary on {pending[0]}, {pending[1]} words")
+            pending = None
+
     while True:
         try:
-            line = input("link> ").strip()
+            # Named after the database rather than after what it takes, because
+            # the thing you can't otherwise tell by looking is where a paste is
+            # about to land. Re-read each time: `db` at this prompt moves it.
+            line = input(f"{database.current()}> ").strip()
         except EOFError:
             print()
             return 0
@@ -741,43 +1162,81 @@ def cmd_watch(args) -> int:
             print()
             continue
 
+        # A blank line is how a paste ends, so it's the natural place to total
+        # up what arrived rather than something to ignore.
         if not line:
+            settled()
             continue
         if line in ("quit", "exit", "q"):
+            settled()
             return 0
         if line in ("help", "h", "?"):
+            settled()
             print(PROMPT_HELP)
             continue
 
         if entry := parse_entry(line):
-            capture_entry(*entry, rate)
+            settled()
+            holding = capture_entry(*entry, rate)
+            continue
+
+        # A bare total on its own line is the number you'd have put after the
+        # link, typed a moment later — which is how it actually goes, since you
+        # have to open the booking page to find out what it is.
+        if holding and (total := as_number(line)) is not None:
+            settled()
+            if not price_stored(holding, total, rate):
+                print("  the stay that was for isn't in this database any more")
+                holding = None
             continue
 
         # A paste that didn't parse should say so, rather than being reported as
         # an unknown command — a truncated clipboard is the likely cause.
         if line.startswith(("{", "http")) or "lodgingbuddy.py" in line:
+            settled()
             print("  that looks like a paste but didn't parse — copy it again, "
                   "or check the whole line arrived")
             continue
 
-        # Not a link, so treat it as a command — but only if it names one. A
-        # mistyped paste shouldn't answer with a screenful of argparse usage.
         head = line.split()[0]
-        if head not in getattr(args, "commands", ()):
-            print(f"  not a link, and no command called {head!r} — try `help`")
+        if head in getattr(args, "commands", ()):
+            settled()
+            # argparse exits on a bad command line, which must not take the
+            # prompt down with it.
+            try:
+                sub_args = args.parser.parse_args(shlex.split(line))
+            except (SystemExit, ValueError):
+                continue
+            if func := getattr(sub_args, "func", None):
+                try:
+                    func(sub_args)
+                except (ValueError, OSError, KeyError) as exc:
+                    print(f"  {exc}")
             continue
 
-        # argparse exits on a bad command line, which must not take the prompt
-        # down with it.
-        try:
-            sub_args = args.parser.parse_args(shlex.split(line))
-        except (SystemExit, ValueError):
+        # Prose, then — the listing's own write-up. The bookmarklet brings it
+        # over already, so this is the top-up path: a site whose markup moved,
+        # a description that ran past the cap, the paragraph behind a "read
+        # more". Hence appending rather than replacing.
+        #
+        # A single word is exempt: nothing describing a cottage is one word,
+        # and a mistyped command answered by silently filing it as a
+        # description would be worse than being told the command doesn't exist.
+        if holding and " " in line:
+            if got := attach_summary(holding, line):
+                pending = got
+                continue
+            holding = None
+            print("  that stay isn't in this database — paste the listing here "
+                  "first, then its summary")
             continue
-        if func := getattr(sub_args, "func", None):
-            try:
-                func(sub_args)
-            except (ValueError, OSError, KeyError) as exc:
-                print(f"  {exc}")
+
+        if holding:
+            print(f"  no command called {head!r}, and one word on its own isn't "
+                  f"a summary — try `help`")
+        else:
+            print(f"  not a link, and no command called {head!r} — try `help`. "
+                  f"Summary text goes after the listing it describes.")
 
 
 def main() -> int:
@@ -808,6 +1267,18 @@ def main() -> int:
     s.add_argument("--shares", type=int,
                    help=f"ways this stay's bill splits (default {config.SHARES})")
     s.add_argument("--score", type=float)
+    s.add_argument("--score-scale", type=float, dest="score_scale",
+                   help="what --score is out of, if not the site's usual (5 or 10)")
+    s.add_argument("--look", type=int, choices=range(1, 6), metavar="1-5",
+                   help="how it looks, out of 5 — the one thing no site can tell you")
+    s.add_argument("--clean", type=int, choices=range(1, 6), metavar="1-5",
+                   help="how clean it looks, out of 5; beats the site's sub-score")
+    s.add_argument("--amenities", metavar="A,B,C",
+                   help="comma-separated, e.g. 'parking,hot tub'; replaces the list")
+    s.add_argument("--address", help="street address, for measuring the walk")
+    s.add_argument("--summary",
+                   help="the listing's own write-up; replaces what's there, "
+                        "where pasting it at the prompt adds to it")
     s.add_argument("--currency")
     s.add_argument("--note")
     s.add_argument("--offer", help="which rate this is, e.g. '3 adults, free cancellation'")
@@ -827,7 +1298,14 @@ def main() -> int:
     if config.DEFAULT_SORT not in SORTS:
         sys.exit(f"{config.PATH}: default_sort={config.DEFAULT_SORT!r} isn't one "
                  f"of: {', '.join(sorted(SORTS))}")
+    # Warned about rather than fatal: a weight that can't fire is a settings
+    # mistake, but it shouldn't stand between you and the four stays you've
+    # already captured.
+    for complaint in scoring.complaints():
+        print(f"{config.PATH}: {complaint}", file=sys.stderr)
     l.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT)
+    l.add_argument("--viable", action="store_true",
+                   help="hide stays that fail a must-have in [filters]")
     l.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
                    metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                    help=f"convert {config.BASE_CURRENCY} prices to "
@@ -838,12 +1316,28 @@ def main() -> int:
     r.add_argument("id", nargs="?")
     r.set_defaults(func=cmd_refresh)
 
+    wk = sub.add_parser("walk", help="measure the walk to your destinations")
+    wk.add_argument("id", nargs="?")
+    wk.add_argument("--again", action="store_true",
+                    help="re-measure stays already done, e.g. after editing "
+                         "the destinations")
+    wk.set_defaults(func=cmd_walk)
+
     pa = sub.add_parser("paste", help="accept a record from the browser bookmarklet")
     pa.add_argument("json", nargs="?", help="JSON payload (or pipe it on stdin)")
     pa.add_argument("--price", type=float)
     pa.add_argument("--nights", type=int)
     pa.add_argument("--adults", type=int)
     pa.set_defaults(func=cmd_paste)
+
+    d = sub.add_parser("db", help="which set of stays to work in")
+    d.add_argument("name", nargs="?",
+                   help="switch to this database, and stay there until told "
+                        "otherwise")
+    d.add_argument("--new", action="store_true",
+                   help="start it — required, so a typo can't silently open an "
+                        "empty database instead of the one you meant")
+    d.set_defaults(func=cmd_db)
 
     rm = sub.add_parser("rm", help="remove one or more stays")
     rm.add_argument("ids", nargs="+")

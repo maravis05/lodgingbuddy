@@ -8,6 +8,11 @@
 [storage]
 # Where captured stays are kept. A relative path sits next to the script.
 file = "stays.json"
+# Every other .json in that same folder is a database too, and `db <name>`
+# moves between them — real candidates in one, throwaway examples in another,
+# without a flag on every line. The choice sticks until you change it, so the
+# prompt is named after the database you're in. LODGINGBUDDY_DB wins for a
+# single run without moving the pointer.
 
 
 [http]
@@ -44,6 +49,13 @@ label = "share"
 
 [display]
 default_sort = "share"
+# Which columns `list` prints, and in what order. Pick from: name, source,
+# where, checkin, nts, slp, space, all_in, share_nt, score, reviews, clean,
+# look, walk, points, value. All of them at once is wider than a terminal, and
+# which ones earn their place changes with the trip — `where` and `checkin`
+# say nothing when every stay is the same town on the same dates.
+columns = ["name", "source", "space", "slp", "walk", "all_in", "share_nt",
+           "score", "points", "value"]
 # Between columns, and the rule under the header.
 column_gap = "  "
 rule_char = "─"
@@ -64,6 +76,11 @@ inclusive = ""
 added = "+"
 unknown = "?"
 
+# Leads a row that fails a must-have in [filters], or that we can't tell about.
+[display.gate_marks]
+fail = "✗"
+unknown = "?"
+
 
 [booking]
 # Booking.com encodes the selected room block's price on the end of
@@ -71,6 +88,137 @@ unknown = "?"
 # pattern catches — a £40 fragment, an ID that happens to parse.
 min_price = 10
 max_price = 100000
+
+
+# ── What you actually want ────────────────────────────────────────────────
+#
+# This is the part you re-tune per trip. Price is not in here, on purpose:
+# `points` is pure desirability, and cost comes back separately as the
+# denominator of `value` (points per £25 a share a night). Mixing price into
+# the score can't tell a cheap disappointment from an expensive one.
+#
+# Tiers are not additive — a quantity falls into the first band it qualifies
+# for and takes that band's points, so list them generous-first. Everything a
+# tier reads is normalised to 0–100 first, which is why a five-star site, a
+# ten-point site and your own mark out of 5 all fit one table.
+
+[scoring]
+# Only sets the scale of `value` — at 25 it reads "points per £25 a share a
+# night". Changing it relabels the column without reordering the table.
+price_unit = 25
+
+# Can we walk it, or are we driving? The one location question worth asking.
+[scoring.tiers.walk_minutes]
+direction = "lower"
+steps = [
+  { max = 10, points = 25 },   # out the door and you're there
+  { max = 20, points = 15 },   # a walk, but nobody complains
+  { max = 35, points = 6 },    # you'd do it once, in good weather
+]
+
+# What previous guests said, as a percentage of full marks.
+[scoring.tiers.guest_score]
+direction = "higher"
+steps = [
+  { min = 90, points = 20 },
+  { min = 80, points = 12 },
+  { min = 70, points = 5 },
+]
+
+# How much that score is worth. 9.8 from four reviews is not 9.8.
+[scoring.tiers.reviews]
+direction = "higher"
+steps = [
+  { min = 200, points = 6 },
+  { min = 50, points = 4 },
+  { min = 10, points = 2 },
+]
+
+# Booking.com breaks cleanliness out as its own sub-score. Your own mark, set
+# with `set <id> --clean N`, overrides it.
+[scoring.tiers.cleanliness]
+direction = "higher"
+steps = [
+  { min = 90, points = 12 },
+  { min = 80, points = 7 },
+  { min = 70, points = 2 },
+]
+
+# Aesthetic appeal, out of 5, from `set <id> --look N`. Nothing can scrape
+# this — it's the one factor that is only ever your own eyes on the photos.
+[scoring.tiers.look]
+direction = "higher"
+steps = [
+  { min = 100, points = 15 },  # 5/5
+  { min = 80, points = 10 },   # 4/5
+  { min = 60, points = 4 },    # 3/5
+]
+
+# Beds beyond heads: somewhere to put the bags, not another body.
+[scoring.tiers.spare_beds]
+direction = "higher"
+steps = [
+  { min = 2, points = 8 },
+  { min = 1, points = 5 },
+]
+
+# Flat points for a fact being true. Amenity names are the canonical slugs in
+# sources.py's AMENITY_ALIASES; `second_bathroom` reads the bathroom count.
+[scoring.bonuses]
+parking = 6
+kitchen = 5
+second_bathroom = 5
+wifi = 4
+hot_tub = 4
+washing_machine = 3
+fireplace = 3
+
+
+# ── Must-haves ────────────────────────────────────────────────────────────
+#
+# Gates, not preferences — no amount of hot tub buys back a bedroom that isn't
+# there. A stay that fails one is kept and marked, never dropped.
+
+[filters]
+# Nobody shares a bedroom with someone they didn't come with. Measured in
+# shares, not heads: two shares means two bedrooms, whether that's a couple
+# plus a singleton or two singletons. A hotel booking satisfies it with rooms.
+private_bedroom_per_share = true
+# 0 means don't gate on it — the walk still scores, it just can't rule
+# anything out.
+max_walk_minutes = 0
+# Amenity slugs a stay must have, e.g. ["parking", "wifi"].
+require = []
+
+
+# ── Where you want to be ──────────────────────────────────────────────────
+#
+# `walk` measures minutes on foot from each stay to each of these. Rewrite the
+# list per trip — this is what makes the tool work for Edinburgh as well as
+# Oban. `weight` is that destination's share of the average the walk tier
+# scores; they need not sum to anything.
+
+[maps]
+# The key is read from this environment variable, never from this file, which
+# is committed. Needs Distance Matrix enabled.
+api_key_env = "GOOGLE_MAPS_API_KEY"
+host = "maps.googleapis.com"
+mode = "walking"
+
+[[destination]]
+label = "Oban town centre"
+address = "George Street, Oban PA34 5NX, UK"
+weight = 0.6
+
+[[destination]]
+label = "Ferry terminal"
+address = "Oban Ferry Terminal, Railway Pier, Oban PA34 4DB, UK"
+weight = 0.25
+
+[[destination]]
+label = "Oban Distillery"
+address = "Oban Distillery, Stafford Street, Oban PA34 5NH, UK"
+weight = 0.15
 
 
 # Sites, tried in the order listed. `domain` is matched against the URL host and
@@ -81,6 +229,7 @@ name = "booking.com"
 domain = "booking.com"
 parser = "booking"
 currency = "GBP"        # Scottish properties price in GBP
+score_scale = 10        # Booking rates out of 10; the cottage sites use 5
 # Booking.com shows a US booker prices with VAT stripped out, then adds it back
 # at checkout — a $429 room bills as $514.53. Set true if your account displays
 # inclusive prices, or override one stay with `set <id> --incl-tax`.
@@ -92,6 +241,7 @@ domain = "sykescottages.co.uk"
 parser = "sykes"
 currency = "GBP"
 tax_included = true     # UK consumer site: prices shown inclusive
+score_scale = 5
 
 [[source]]
 name = "cottages.com"
@@ -99,6 +249,7 @@ domain = "cottages.com"
 parser = "awaze"
 currency = "GBP"
 tax_included = true
+score_scale = 5
 
 [[source]]
 name = "hoseasons"
@@ -106,10 +257,14 @@ domain = "hoseasons.co.uk"
 parser = "awaze"
 currency = "GBP"
 tax_included = true
+score_scale = 5
 
 
 [bookmarklet]
 source = "bookmarklet.js"
 output = "bookmarklet.txt"
+# Importable bookmark file, so you needn't copy 30-odd KB out of a terminal.
+bookmark_file = "bookmarklet.html"
+title = "Grab this stay"
 # Past roughly this, some browsers refuse to store the bookmark.
 max_url_bytes = 60000

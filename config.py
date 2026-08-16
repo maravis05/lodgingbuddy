@@ -46,23 +46,82 @@ DEFAULTS = {
         "name_width": 30,
         "source_width": 11,
         "where_width": 20,
+        "columns": ["name", "source", "space", "slp", "walk", "all_in",
+                    "share_nt", "score", "points", "value"],
         "status_marks": {"ok": " ", "needs_price": "·", "blocked": "!"},
         "tax_marks": {"inclusive": "", "added": "+", "unknown": "?"},
+        "gate_marks": {"fail": "✗", "unknown": "?"},
     },
     "booking": {"min_price": 10, "max_price": 100_000},
+    # Desirability, with price deliberately left out — see scoring.py.
+    "scoring": {
+        "price_unit": 25,
+        "tiers": {
+            "walk_minutes": {"direction": "lower", "steps": [
+                {"max": 10, "points": 25},
+                {"max": 20, "points": 15},
+                {"max": 35, "points": 6},
+            ]},
+            "guest_score": {"direction": "higher", "steps": [
+                {"min": 90, "points": 20},
+                {"min": 80, "points": 12},
+                {"min": 70, "points": 5},
+            ]},
+            "reviews": {"direction": "higher", "steps": [
+                {"min": 200, "points": 6},
+                {"min": 50, "points": 4},
+                {"min": 10, "points": 2},
+            ]},
+            "cleanliness": {"direction": "higher", "steps": [
+                {"min": 90, "points": 12},
+                {"min": 80, "points": 7},
+                {"min": 70, "points": 2},
+            ]},
+            "look": {"direction": "higher", "steps": [
+                {"min": 100, "points": 15},
+                {"min": 80, "points": 10},
+                {"min": 60, "points": 4},
+            ]},
+            "spare_beds": {"direction": "higher", "steps": [
+                {"min": 2, "points": 8},
+                {"min": 1, "points": 5},
+            ]},
+        },
+        "bonuses": {
+            "wifi": 4, "parking": 6, "kitchen": 5, "washing_machine": 3,
+            "second_bathroom": 5, "hot_tub": 4, "fireplace": 3,
+        },
+    },
+    # Gates, not preferences. A stay that fails one is kept and marked, never
+    # dropped — you captured it, so it stays captured.
+    "filters": {
+        "private_bedroom_per_share": True,
+        "max_walk_minutes": 0,
+        "require": [],
+    },
+    "maps": {
+        "api_key_env": "GOOGLE_MAPS_API_KEY",
+        "host": "maps.googleapis.com",
+        "mode": "walking",
+    },
+    # Where you actually want to be, per trip. Empty means `walk` has nothing
+    # to measure against and says so.
+    "destination": [],
     "source": [
         {"name": "booking.com", "domain": "booking.com", "parser": "booking",
-         "currency": "GBP", "tax_included": False},
+         "currency": "GBP", "tax_included": False, "score_scale": 10},
         {"name": "sykes", "domain": "sykescottages.co.uk", "parser": "sykes",
-         "currency": "GBP", "tax_included": True},
+         "currency": "GBP", "tax_included": True, "score_scale": 5},
         {"name": "cottages.com", "domain": "cottages.com", "parser": "awaze",
-         "currency": "GBP", "tax_included": True},
+         "currency": "GBP", "tax_included": True, "score_scale": 5},
         {"name": "hoseasons", "domain": "hoseasons.co.uk", "parser": "awaze",
-         "currency": "GBP", "tax_included": True},
+         "currency": "GBP", "tax_included": True, "score_scale": 5},
     ],
     "bookmarklet": {
         "source": "bookmarklet.js",
         "output": "bookmarklet.txt",
+        "bookmark_file": "bookmarklet.html",
+        "title": "Grab this stay",
         "max_url_bytes": 60_000,
     },
 }
@@ -102,6 +161,11 @@ CONFIG = _load()
 STORE = Path(CONFIG["storage"]["file"])
 if not STORE.is_absolute():
     STORE = HERE / STORE
+# Databases are named files in one folder — stays.json is "stays" — and `db`
+# switches between them. Derived from `file` rather than set separately so an
+# existing store needs no migration and new ones land beside it.
+STORE_DIR = STORE.parent
+DEFAULT_DB = STORE.stem
 
 # http
 USER_AGENT = CONFIG["http"]["user_agent"]
@@ -128,12 +192,30 @@ RULE_CHAR = CONFIG["display"]["rule_char"]
 NAME_WIDTH = CONFIG["display"]["name_width"]
 SOURCE_WIDTH = CONFIG["display"]["source_width"]
 WHERE_WIDTH = CONFIG["display"]["where_width"]
+COLUMNS = CONFIG["display"]["columns"]
 STATUS_MARKS = CONFIG["display"]["status_marks"]
 TAX_MARKS = CONFIG["display"]["tax_marks"]
+GATE_MARKS = CONFIG["display"]["gate_marks"]
 
 # booking
 BOOKING_MIN_PRICE = CONFIG["booking"]["min_price"]
 BOOKING_MAX_PRICE = CONFIG["booking"]["max_price"]
+
+# scoring
+PRICE_UNIT = CONFIG["scoring"]["price_unit"]
+TIERS = CONFIG["scoring"]["tiers"]
+BONUSES = CONFIG["scoring"]["bonuses"]
+
+# hard filters
+REQUIRE_PRIVATE_BEDROOMS = CONFIG["filters"]["private_bedroom_per_share"]
+MAX_WALK_MINUTES = CONFIG["filters"]["max_walk_minutes"] or None
+REQUIRED_AMENITIES = CONFIG["filters"]["require"]
+
+# proximity
+MAPS_KEY_ENV = CONFIG["maps"]["api_key_env"]
+MAPS_HOST = CONFIG["maps"]["host"]
+MAPS_MODE = CONFIG["maps"]["mode"]
+DESTINATIONS = CONFIG["destination"]
 
 # sites, in the order they're tried
 SOURCES = CONFIG["source"]
@@ -141,4 +223,6 @@ SOURCES = CONFIG["source"]
 # bookmarklet build
 BOOKMARKLET_SRC = HERE / CONFIG["bookmarklet"]["source"]
 BOOKMARKLET_OUT = HERE / CONFIG["bookmarklet"]["output"]
+BOOKMARKLET_HTML = HERE / CONFIG["bookmarklet"]["bookmark_file"]
+BOOKMARKLET_TITLE = CONFIG["bookmarklet"]["title"]
 BOOKMARKLET_MAX_BYTES = CONFIG["bookmarklet"]["max_url_bytes"]

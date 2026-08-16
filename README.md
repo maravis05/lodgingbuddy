@@ -3,14 +3,42 @@
 Collate lodging options you pick while browsing, so comparing them doesn't mean
 copy-pasting into a spreadsheet.
 
-Paste a link and it captures what it can — name, place, dates, sleeps, bedrooms,
-review score, and a price where the site will give one up. Fill the gaps with
-`set`; `list` puts everything side by side on one comparable number.
+Paste a link and it captures what it can — name, place, dates, beds, amenities,
+review scores, and a price where the site will give one up. Fill the gaps with
+`set`; `list` puts everything side by side.
+
+Cost is the easy part, and on its own it isn't a reason to need a tool: if price
+were the only thing that mattered you'd book the cheapest and be done. So the
+table also carries the things that actually decide it — how long the walk into
+town is, whether everyone gets their own bedroom, what previous guests said and
+how many of them said it, and how the place looks to you. `points` scores those
+and leaves price out entirely; `value` puts price back as the denominator, so
+the question becomes how much of what you want each pound is buying.
 
 ## Prerequisites
 
-Python 3.11 or newer on your `PATH` (3.11 is where `tomllib` arrived). Nothing
-to install — it's standard library only. Check with `python3 --version`.
+Python 3.11 or newer — that's where `tomllib` arrived. Nothing else: this is
+standard library only, so there's no `pip install` step and no virtual
+environment to set up. Windows, macOS and Linux all work the same way.
+
+If you haven't got Python, [python.org/downloads](https://www.python.org/downloads/)
+covers every platform. On Windows, tick **Add python.exe to PATH** in the
+installer — it's off by default, and skipping it is the usual reason a fresh
+install seems to vanish.
+
+To check, open a terminal — Terminal on macOS, PowerShell on Windows, whichever
+one you use on Linux — move into the folder holding these files, and run:
+
+```console
+$ python3 --version
+Python 3.13.1
+```
+
+**Two notes on reading the examples.** The `$` and `stays>` at the start of a
+line are the prompt: they're already on screen, so you type what comes after.
+And the command is spelled `python3` throughout, which is right on macOS and
+most Linux systems; on Windows it's `python`, or `py` if that isn't found.
+Substitute the one that works and nothing else changes between platforms.
 
 ## Use
 
@@ -19,32 +47,68 @@ one process rather than one per link. Paste a link — or the bookmarklet's
 output — and press enter. Add a space and the total you're paying to record it:
 
 ```console
-$ ./lodgingbuddy.py
-lodgingbuddy — 4 stays on file. `help` for what this takes.
-link> https://www.booking.com/Share-LjP6kp 480
+$ python3 lodgingbuddy.py
+lodgingbuddy — 4 stays in stays. `help` for what this takes.
+stays> https://www.booking.com/Share-LjP6kp 480
   Strathisla Oban [booking.com] · 3 nts · 480 GBP all-in · 80/share/nt
-link> ./lodgingbuddy.py paste '{"source":"sykes",...}' 582
+stays> ./lodgingbuddy.py paste '{"source":"sykes",...}' 582
   Heather Island View [sykes] · 3 nts · 582 GBP all-in · 97/share/nt
-link> list
+stays> list
 ```
 
 The total is optional — leave it off and the stay is captured with whatever the
 site gave up. A number typed here is taken as the **final** price: quoted for
-your dates, tax included, and authoritative over anything scraped. Anything
-that isn't a link runs as a command. Ctrl-D quits.
+your dates, tax included, and authoritative over anything scraped. Ctrl-D quits.
+
+One listing usually arrives as two pastes, because you don't have all of it at
+once: the bookmarklet fires on the listing page, but the real total only appears
+after you click through to book. So the total can be its own line — the lines
+after a capture know what they're about:
+
+```console
+stays> ./lodgingbuddy.py paste '{"source":"booking.com",...}'
+  Strathisla Oban [booking.com] · 3 nts
+    no price — type the total on the next line
+stays> 582
+  Strathisla Oban [booking.com] · 3 nts · 582 GBP all-in · 97/share/nt
+```
+
+Anything that isn't a link, a total or a command is filed as that stay's
+**summary** — the listing's own prose, kept verbatim. The bookmarklet already
+brings it along, so this is for topping up: a site whose markup moved, a
+description that ran past the cap, the paragraph the page keeps behind a "read
+more".
+
+```console
+stays> Set in three acres of walled grounds a short walk from the harbour, …
+stays>
+  + summary on Strathisla Oban, 49 words
+```
+
+It appends, so a paragraph arriving as six lines lands as one summary; a blank
+line says you've finished and it reports the word count. `set <id> --summary "…"`
+replaces it instead.
+
+A single word is never a summary — nothing describing a cottage is one word, and
+a mistyped command answered by silently filing it as a description would be
+worse than being told the command doesn't exist.
 
 Every command also works as a one-shot:
 
 ```console
-$ ./lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/Argyll-and-Bute-Kilbowie/...
-$ ./lodgingbuddy.py set heather --price 582 --incl-tax
-$ ./lodgingbuddy.py list
-   Property             Source       Where                 Check-in        Nts  Slp  All-in   Share/nt  Score
-─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Strathisla Oban      booking.com                        2026-10-09 Fri  3    3    380 GBP  63        —
-   The Distillers Den   booking.com                        2026-10-12 Mon  2    3    364 GBP  91        —
-   Heather Island View  sykes        Near Oban, Argyll an  2026-10-09 Fri  3    4    582 GBP  97        —
-   Harbour View         cottages.co  Oban                  2026-10-09 Fri  3    3    671 GBP  112       4
+$ python3 lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/Argyll-and-Bute-Kilbowie/...
+$ python3 lodgingbuddy.py set heather --price 582 --incl-tax --look 4
+$ python3 lodgingbuddy.py walk
+$ python3 lodgingbuddy.py list --sort value
+   Property             Source       Space    Slp  Walk  All-in   Share/nt  Guest  Pts  Value
+─────────────────────────────────────────────────────────────────────────────────────────────
+   Heather Island View  sykes        2br 1ba  4    12m   582 GBP  97        —      17   4.4
+?  Harbour View         cottages.co           3    —     671 GBP  112       80%    12   2.7
+   The Distillers Den   booking.com  2br      3    6m    364 GBP  91        —      0    0
+   Strathisla Oban      booking.com  2rm      3    9m    380 GBP  63        —      0    0
+
+?  can't tell whether it clears a must-have — held back rather than ruled out:
+     Harbour View — unknown: 2 private bedrooms
 ```
 
 | command | |
@@ -52,13 +116,57 @@ $ ./lodgingbuddy.py list
 | *(none)* | hold a prompt open for pasted links |
 | `add <url>` | capture a stay from a URL |
 | `set <id> --price N …` | fill in or correct a field |
-| `list [--sort K] [--rate N]` | everything side by side |
+| `list [--sort K] [--viable]` | everything side by side |
 | `show <id> [--json]` | one stay in full, with the arithmetic shown |
+| `walk [id] [--again]` | measure the walk to your destinations |
 | `refresh [id]` | re-fetch prices |
 | `paste [json]` | take a record from the bookmarklet |
 | `rm <id>…` | drop stays you've ruled out |
+| `db [name] [--new]` | which set of stays to work in |
 
 `<id>` is a property code or part of a name — `1198632`, `heather`.
+
+`--sort` takes `share`, `price`, `score`, `sleeps`, `walk`, `points`, `value`,
+`checkin` or `name`. `--viable` hides anything that fails a must-have.
+
+## More than one set of stays
+
+Two trips, or a real shortlist and a pile of examples you're only feeding in to
+sharpen the scoring — either way they shouldn't be in the same table. A database
+is a name and a file: `examples` is `examples.json` next to `stays.json`, and
+every `.json` in that folder is one.
+
+```console
+$ python3 lodgingbuddy.py db examples --new
+Started and now in examples — 0 stays. `db stays` goes back to 4 stays.
+$ python3 lodgingbuddy.py db
+→ examples  0 stays
+  stays     4 stays
+```
+
+The choice sticks, so it's said once rather than typed on every capture — which
+is also why the prompt is named after the database you're in, and why `list`
+says so when it isn't the usual one. A mode you can't see is one you'll
+eventually paste into by mistake.
+
+`db <name>` switches; without `--new` it refuses a name that doesn't exist, so a
+typo can't quietly open an empty database instead of the one you meant. Delete a
+database by deleting its file.
+
+To read a different one for a single command without moving the pointer, set
+`LODGINGBUDDY_DB`. How you do that for one command is the one thing that really
+does differ by platform:
+
+```console
+macOS, Linux   $ LODGINGBUDDY_DB=examples python3 lodgingbuddy.py list
+PowerShell     > $env:LODGINGBUDDY_DB="examples"; python lodgingbuddy.py list
+Command Prompt > set LODGINGBUDDY_DB=examples && python lodgingbuddy.py list
+```
+
+The PowerShell and Command Prompt forms outlive the command and stay set for the
+rest of that window; `Remove-Item Env:\LODGINGBUDDY_DB` and `set
+LODGINGBUDDY_DB=` respectively undo them. If that's a nuisance, `db <name>` and
+back is the simpler route.
 
 ## The numbers
 
@@ -80,12 +188,167 @@ Where a property's own price is known it beats the OTA's converted one, which
 has FX markup baked in. A "from" price is marked `~` and is not a quote for your
 dates — click through and `set` the real total.
 
+## Everything that isn't cost
+
+`Pts` is how much you want to stay somewhere. Price is deliberately not in it.
+Cost comes back as `Value` — points per £25 a share a night — so the column
+you sort on answers "which of these gives me the most of what I want per
+pound", and a cheap disappointment stops looking like a bargain.
+
+The weights are all in `config.toml` and are meant to be edited per trip. Two
+shapes of rule:
+
+**Tiers** band a quantity. They aren't additive: a six-minute walk scores the
+top band, not every band it passes. List them generous-first.
+
+```toml
+[scoring.tiers.walk_minutes]
+direction = "lower"
+steps = [
+  { max = 10, points = 25 },   # out the door and you're there
+  { max = 20, points = 15 },   # a walk, but nobody complains
+  { max = 35, points = 6 },    # you'd do it once, in good weather
+]
+```
+
+**Bonuses** are flat points for a fact being true — `parking = 6`, `wifi = 4`.
+
+Everything a tier reads is normalised to 0–100 first, which is what lets one
+table score a five-star site, a ten-point site and your own mark out of 5. It
+also fixes a real trap: sorting raw review scores ranked a 4.8-out-of-5 below a
+9.0-out-of-10.
+
+Two factors are yours alone, because nothing can scrape them:
+
+```console
+$ python3 lodgingbuddy.py set heather --look 4 --clean 5
+```
+
+`--look` is aesthetic appeal out of 5. `--clean` is how clean it looks, and
+overrides the site's cleanliness sub-score where there is one — you looked at
+the photos with your own standards in mind, and an aggregate of strangers
+didn't.
+
+The **summary** is captured but not scored, and deliberately so: nothing here
+reads prose, and a number quietly derived from one would be a judgement you
+couldn't check. It's kept because it's the evidence — the sofa bed, the steep
+track, the sea view that turns out to be from the car park — and because a
+scoring rule worth having is one fitted to stays you've actually judged rather
+than one guessed in advance.
+
+`show` never prints a bare total. It names every contribution, because a
+composite you can't take apart is one you end up either trusting or ignoring
+wholesale:
+
+```
+  Points    17   spare_beds=5 | +wifi=4 | +kitchen=5 | +fireplace=3 | no data: walk_minutes, guest_score, reviews, cleanliness, look
+  Value     4.4  = 17 points / (97 GBP per share a night / 25)
+```
+
+That `no data:` tail matters more than it looks. A place nobody has reviewed
+scores the same zero as a place everybody disliked, and it is the only thing
+telling them apart. `list` repeats it under the table.
+
+## Must-haves
+
+Gates, not preferences — no amount of hot tub buys back a bedroom that isn't
+there. They live in `[filters]`:
+
+```toml
+private_bedroom_per_share = true
+max_walk_minutes = 0     # 0 = don't gate on it
+require = []             # e.g. ["parking", "wifi"]
+```
+
+`private_bedroom_per_share` is measured in shares, not heads, reusing the same
+idea as the split: a couple is one share and one bedroom, a singleton is one
+share and one bedroom. Three of you sharing two ways needs two bedrooms. A
+hotel booking satisfies it with rooms instead.
+
+A stay that fails is marked `✗` and kept — you captured it, so it stays
+captured. `list --viable` hides them. A stay we simply lack the data on is
+marked `?` and held back rather than ruled out, which is not the same claim:
+
+```
+✗  fails a must-have, so no score can buy it back:
+     Heather Island View — needs hot_tub
+
+?  can't tell whether it clears a must-have — held back rather than ruled out:
+     Harbour View — unknown: 2 private bedrooms
+```
+
+## How far is it, really
+
+Coordinates tell a human nothing. The only location question anyone actually
+asks is whether you have to drive, so `walk` stores minutes on foot and the
+table never shows a distance.
+
+Name the places you want to be near in `config.toml`. This is the part you
+rewrite per trip — it's what makes the tool work for Edinburgh as well as Oban:
+
+```toml
+[[destination]]
+label = "Oban town centre"
+address = "George Street, Oban PA34 5NX, UK"
+weight = 0.6
+```
+
+`weight` is that destination's share of the average the walk tier scores; they
+need not sum to anything.
+
+It needs a Google Maps key with Distance Matrix enabled, read from the
+environment and never from `config.toml`, which is committed. Put the key in
+the environment the way your platform does it, then run `walk`:
+
+```console
+macOS, Linux   $ export GOOGLE_MAPS_API_KEY=…
+PowerShell     > $env:GOOGLE_MAPS_API_KEY="…"
+Command Prompt > set GOOGLE_MAPS_API_KEY=…
+```
+
+```console
+$ python3 lodgingbuddy.py walk
+  Heather Island View: Oban town centre 12m, Ferry terminal 18m
+```
+
+Each of those lasts as long as the terminal window is open, so it's once per
+session rather than once per command. To stop setting it by hand, put it in your
+shell profile on macOS and Linux, or under **Environment Variables** in the
+Windows system settings. One call per
+stay, all destinations batched. Stays already measured are skipped unless you
+pass `--again` — which is what you want after editing the destination list.
+
+Straight-line distance would be free and, here, wrong: a sea loch turns six
+kilometres into a forty-minute drive, and Argyll is mostly sea lochs.
+
+Measuring needs somewhere to measure *from*. Sykes publishes coordinates and
+Booking.com's map pin gives them up to the bookmarklet; failing both, an
+address works, since the routing service geocodes it:
+
+```console
+$ python3 lodgingbuddy.py set harbour --address "Corran Esplanade, Oban PA34 5AQ"
+```
+
 ## Config
 
-Everything tunable lives in `config.toml`: store path, VAT rate, currency pair,
-the split, table shape, and which domains route to which adapter. Every key has
-a built-in default, so a partial file — or none — still runs. Set
-`LODGINGBUDDY_CONFIG` to use a different file.
+Everything tunable lives in `config.toml`: store path — which also names the
+default database and the folder the others live in — VAT rate, currency pair,
+the split, scoring weights, must-haves, destinations, table shape, and which
+domains route to which adapter. Every key has a built-in default, so a partial
+file — or none — still runs. Set `LODGINGBUDDY_CONFIG` to use a different file,
+the same way as `LODGINGBUDDY_DB` above.
+
+The table got wide enough that `columns` picks which of them `list` prints:
+
+```toml
+columns = ["name", "source", "space", "slp", "walk", "all_in", "share_nt",
+           "score", "points", "value"]
+```
+
+Choose from `name`, `source`, `where`, `checkin`, `nts`, `slp`, `space`,
+`all_in`, `share_nt`, `score`, `reviews`, `clean`, `look`, `walk`, `points`,
+`value`. Which ones earn their place changes with the trip — `where` and
+`checkin` say nothing when every stay is the same town on the same dates.
 
 ## Sources
 
@@ -94,11 +357,26 @@ lot, so this is what actually came back rather than what the adapters hope for:
 
 | site | how it's read | what came back |
 |---|---|---|
-| **sykescottages.co.uk** | schema.org JSON-LD, no bot wall | name, location, region, sleeps, bedrooms, bathrooms, review score, and a "from" price |
+| **sykescottages.co.uk** | schema.org JSON-LD, no bot wall | name, location, region, sleeps, bedrooms, bathrooms, total rooms, **bed layout**, **amenities**, **coordinates**, **the write-up**, check-in/out times, and a "from" price |
 | **booking.com** — `/Share-` link | the first 301 carries the query string | property, dates, party size |
 | **booking.com** — property URL | URL parameters | name, dates, nights, party, rooms |
-| **cottages.com** | Next.js `__NEXT_DATA__` | name, location, review score, nights |
+| **booking.com** — bookmarklet | the rendered page | **score and sub-scores, review count, amenities, beds, address, map pin, the write-up** |
+| **cottages.com** | Next.js `__NEXT_DATA__` | name, location, review score, nights, **the write-up** |
 | **hoseasons.co.uk** | same platform as cottages.com | name and property code |
+
+**The write-up** comes over too, verbatim and unparsed — from JSON-LD on Sykes,
+from `__NEXT_DATA__` on the Awaze pair, and off the rendered page on
+Booking.com, with the page's `meta` description as a last resort for a site
+whose markup has moved. It's the part of a listing no schema has a column for:
+which bed is the sofa bed, how steep the track is, whether the sea view is from
+the kitchen or the car park. Boilerplate that lives inside the description block
+— Booking.com's Genius banner, "show more" — is dropped a line at a time.
+
+Sykes turned out to be publishing far more than was being read: the bed list
+(1 double + 2 singles), an amenity list, a room count and coordinates were all
+sitting in its JSON-LD, discarded. That bed list is the honest answer to "how
+much space" — "sleeps 4" counts a sofa bed in the lounge the same as a double
+behind a door, and only one of those settles who sleeps where.
 
 **No site hands over a usable total for your dates.** Sykes publishes a "from"
 figure (shown `~`, and a 3-night stay advertised "from £1090" billed at £582).
@@ -130,31 +408,88 @@ because it is a browser that has already solved the challenge, already run the
 site's JavaScript, and already has your dates and currency applied. The data is
 sitting rendered in front of you; this just picks it up.
 
-It also crosses machines, which is why it exists here: the browser can be on
-your laptop while the script runs on a headless box over SSH. The clipboard is
-the bridge. (A Chrome extension can't do that — Native Messaging only talks to
-the same machine.)
+It works in any browser on any platform, since the code runs inside the page
+rather than against anything on your machine. And because the clipboard is all
+that passes between the two halves, the browser needn't even be on the same
+computer as the script — handy if you keep this on a server and browse from a
+laptop, but nothing depends on that arrangement. (A browser extension couldn't
+do it either way round without an install and a permissions dialog.)
 
 **Build and install.**
 
+Neither output file is committed, so build them first. Any machine with Python 3
+will do:
+
 ```console
 $ python3 build_bookmarklet.py
-source    11,209 bytes
-stripped   8,011 bytes
-encoded   14,990 bytes  ->  bookmarklet.txt
+source    25,904 bytes
+stripped  18,342 bytes
+encoded   34,538 bytes  ->  bookmarklet.txt, bookmarklet.html
 ```
 
-Create a new bookmark, and paste the contents of `bookmarklet.txt` into its
-**URL** field — not the name. Keep it on the bookmarks bar. Note that most
-browsers strip `javascript:` if you paste it into the address bar directly, so
-it has to go in via the bookmark editor. Rebuild after editing
-`bookmarklet.js`, and re-paste.
+`bookmarklet.html` is a bookmark file in the Netscape format every browser's
+importer speaks, holding the one bookmarklet. If you built it somewhere other
+than the machine you browse on, copy it across first. Then install it either way
+round:
+
+- **Drag.** The format is also plain HTML, so opening the file in your browser
+  renders the link — drag **Grab this stay** onto your bookmarks bar.
+- **Import.** Every browser reads this format, under *Import bookmarks* or
+  *Import bookmarks and settings*: in Chrome and Edge via the bookmark
+  manager's ⋮ menu, in Firefox via *Bookmarks → Manage bookmarks → Import and
+  Backup*, in Safari via *File → Import From → Bookmarks HTML File*. Choose the
+  HTML-file option rather than the import-from-another-browser one.
+
+Drag is the more reliable of the two, and the one to fall back on: it's an
+ordinary link, whereas some browsers have been known to drop `javascript:`
+bookmarklets on import.
+
+`bookmarklet.txt` holds the same thing as a bare URL if you would rather
+install it by hand: make a new bookmark and paste the file's contents into its
+**URL** field, not its name. It's 34 KB, so that is a fiddly thing to select
+out of a terminal — hence the bookmark file. Either way it has to go in via
+the bookmark editor, because most browsers strip `javascript:` pasted straight
+into the address bar.
+
+Rebuild after editing `bookmarklet.js`, and reinstall.
 
 **Use.** Open a listing, click the bookmark. It reads the page's schema.org
 JSON-LD, its `__NEXT_DATA__` blob, and failing those the visible text, then
 copies a ready-to-run `./lodgingbuddy.py paste '{...}'` command to your
 clipboard and tells you what it found. Paste that at the prompt, with the total
-after a space if you have it.
+after a space if you have it — or on the next line, once you've clicked through
+to book and know what it is.
+
+Paste it at the `stays>` prompt, not into a terminal. The prompt reads the line
+itself and only wants the `{...}` part, so the `./lodgingbuddy.py` in front is
+ignored and the quoting is handled internally — which is why that text is the
+same on every platform even though it looks like a macOS or Linux command.
+
+For Booking.com it is the *only* route to anything but the price, since the
+property pages are WAF-locked to everything that isn't a browser. It reads the
+review score and its sub-scores, the review count, the facilities list, the bed
+configuration, **the property write-up**, the address and the map pin's
+coordinates — off `data-testid` hooks and the map's `data-atlas-latlng`, which
+have outlasted several rounds of class-name obfuscation. Amenities travel in the site's own words and are
+normalised into slugs on the Python side, so the alias table lives in one
+language rather than being kept in step across two.
+
+The alert now names what it captured, not just the price:
+
+```
+Heather Island View — price 582
+
+Also captured:
+  score 8.6 (1731 reviews)
+  4 sub-scores
+  beds: 1 double, 2 single
+  9 amenities
+  located
+  summary: 210 words
+```
+
+A missing line there is how you find out a site changed its markup — before the
+stay lands in the table scoring zero for no visible reason.
 
 It only reads the DOM — no network calls, no cookies, no storage — and the
 extractor is split from the browser plumbing so it can be tested against saved

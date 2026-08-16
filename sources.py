@@ -64,13 +64,125 @@ def blank_record() -> dict:
         "shares": None,
         # property shape
         "sleeps": None, "bedrooms": None, "bathrooms": None,
+        # The bed list, which is the honest answer to "how much space". "Sleeps
+        # 4" is a capacity claim: it counts a sofa bed in the lounge the same as
+        # a double behind a door. 1 double + 2 singles across 2 bedrooms says
+        # who actually gets to shut a door, and that is the thing being decided.
+        "beds": None, "rooms_total": None,
+        # Canonical slugs — see AMENITY_ALIASES. Sites name the same fact a
+        # dozen ways, and a config that gates on "parking" shouldn't have to
+        # know which of them this site picked.
+        "amenities": None,
+        # The listing's own words, kept verbatim rather than parsed. Filled by
+        # the bookmarklet, which reads the rendered page, and topped up by hand
+        # at the prompt; the adapters below never set it, so a `refresh` can't
+        # trample what you pasted. The prose is where
+        # everything a schema has no column for lives: which bed is the sofa
+        # bed, how steep the track up to it is, whether the sea view is from
+        # the kitchen or from the car park.
+        "summary": None,
         # quality
-        "score": None, "reviews": None,
+        # `score` is meaningless without `score_scale`: 4 out of 5 and 8.6 out
+        # of 10 are the same property, and the site never says which it means.
+        "score": None, "reviews": None, "score_scale": None,
+        # Per-category ratings where a site breaks them out — cleanliness,
+        # location, value. On the same scale as `score`.
+        "subscores": None,
         # practical
         "checkin_time": None, "checkout_time": None,
+        "address": None,
+        # Minutes on foot to each destination in config.toml. Filled by `walk`,
+        # never by a capture — no listing page knows where you want to go.
+        "walk_minutes": None,
+        # Your own marks out of 5, for the things no scrape reaches.
+        "look": None, "clean": None,
         # ours
         "note": None, "status": NEEDS_PRICE, "captured_at": None,
     }
+
+
+# Sites name the same amenity a dozen ways. Matched as substrings against a
+# lowercased, punctuation-stripped version of whatever the page called it, most
+# specific first — "hottub" has to be tried before "tub" would be, and
+# "freeparking" and "onsiteparking" are both just parking.
+AMENITY_ALIASES = {
+    "wifi": ("wifi", "internet", "broadband"),
+    "parking": ("parking", "garage", "driveway"),
+    "kitchen": ("kitchen", "kitchenette", "ovenstove", "oven", "hob", "cooker"),
+    "washing_machine": ("washingmachine", "washer", "laundry"),
+    "dishwasher": ("dishwasher",),
+    # Before `pool`, which "whirlpool" would otherwise also answer to.
+    "hot_tub": ("hottub", "jacuzzi", "whirlpool"),
+    "fireplace": ("fireplace", "woodburner", "logburner", "openfire"),
+    "pet_friendly": ("petfriendly", "petsallowed", "dogfriendly", "dogsallowed",
+                     "petswelcome", "dogswelcome"),
+    "air_conditioning": ("airconditioning", "aircon"),
+    "heating": ("heating", "centralheating", "radiator"),
+    "tv": ("tv", "television", "smarttv"),
+    "balcony": ("balcony", "terrace", "patio"),
+    "garden": ("garden", "yard", "lawn"),
+    "sea_view": ("seaview", "oceanview", "waterview", "lochview"),
+    "pool": ("swimmingpool", "pool"),
+    "lift": ("lift", "elevator"),
+    "ev_charger": ("evcharg", "electricvehiclecharg", "carcharg"),
+    "breakfast": ("breakfast",),
+}
+
+
+def normalise_amenities(raw: list) -> list[str]:
+    """Turn a site's amenity names into canonical slugs, deduplicated and sorted.
+
+    Anything we don't recognise is dropped rather than passed through. A slug
+    only earns its place by being something config.toml can gate or score on,
+    and a list padded with one site's private vocabulary would suggest
+    otherwise.
+    """
+    found = set()
+    for item in raw or []:
+        if isinstance(item, dict):
+            # schema.org LocationFeatureSpecification: {name, value}. A feature
+            # explicitly marked false is an absence, not a presence.
+            if item.get("value") is False:
+                continue
+            item = item.get("name") or item.get("value")
+        if not isinstance(item, str):
+            continue
+        flat = "".join(ch for ch in item.lower() if ch.isalnum())
+        for slug, aliases in AMENITY_ALIASES.items():
+            if any(alias in flat for alias in aliases):
+                found.add(slug)
+                # One line on a page names one amenity, so stop at the first
+                # match. It's also what makes the ordering above load-bearing.
+                break
+    return sorted(found)
+
+
+def beds_from_schema(raw) -> list[dict]:
+    """schema.org BedDetails into [{"type": "double", "count": 2}, …].
+
+    "Double Bed" and "Double" are the same bed, so the noun is dropped — it
+    carries no information and doubles the vocabulary the display has to know.
+    """
+    out = []
+    for item in raw if isinstance(raw, list) else [raw]:
+        if not isinstance(item, dict):
+            continue
+        kind = (item.get("typeOfBed") or "").strip()
+        if isinstance(kind, dict):  # schema.org allows a BedType object
+            kind = kind.get("name") or ""
+        if not kind:
+            continue
+        kind = kind.lower().removesuffix(" bed").strip()
+        count = item.get("numberOfBeds") or 1
+        out.append({"type": kind, "count": int(count)})
+    return out
+
+
+def describe_beds(beds: list | None) -> str:
+    """The bed list as one readable phrase: "1 double, 2 single"."""
+    if not beds:
+        return ""
+    return ", ".join(f"{b.get('count', 1)} {b.get('type', 'bed')}" for b in beds)
 
 
 def apply_site(rec: dict, site: dict) -> None:
@@ -84,6 +196,9 @@ def apply_site(rec: dict, site: dict) -> None:
     rec["currency"] = site.get("currency")
     if site.get("tax_included") is not None:
         rec["tax_included"] = site["tax_included"]
+    # What this site's ratings are out of. A number without its scale can't be
+    # compared with another site's, and no page ever restates it.
+    rec["score_scale"] = site.get("score_scale")
 
 
 def fetch(url: str) -> tuple[int, str]:
@@ -253,6 +368,11 @@ def sykes(url: str, site: dict) -> dict:
         addr = obj.get("address") or {}
         if isinstance(addr, dict):
             rec["location"] = addr.get("streetAddress") or rec["location"]
+            # Kept whole and separately, because it's what a geocoder wants.
+            rec["address"] = ", ".join(
+                x for x in (addr.get("streetAddress"), addr.get("addressLocality"),
+                            addr.get("postalCode"), addr.get("addressCountry"))
+                if isinstance(x, str)) or rec["address"]
 
         rating = obj.get("aggregateRating") or {}
         if isinstance(rating, dict):
@@ -265,6 +385,11 @@ def sykes(url: str, site: dict) -> dict:
             rec["sleeps"] = occ.get("value") if isinstance(occ, dict) else None
             rec["bedrooms"] = place.get("numberOfBedrooms")
             rec["bathrooms"] = place.get("numberOfBathroomsTotal")
+            # Total rooms, not bedrooms — 5 rooms behind 2 bedrooms is a
+            # separate lounge and kitchen rather than a corridor of beds.
+            rec["rooms_total"] = place.get("numberOfRooms")
+            rec["amenities"] = normalise_amenities(place.get("amenityFeature")) or None
+            rec["beds"] = beds_from_schema(place.get("bed")) or None
 
             # The price is a schema.org Offer nested under containsPlace.
             offer = place.get("offers") or {}
