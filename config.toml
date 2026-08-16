@@ -199,12 +199,56 @@ require = []
 # scores; they need not sum to anything.
 
 [maps]
-# The key is read from this environment variable, never from this file, which
-# is committed. Needs Distance Matrix enabled.
+# READ THIS ONE. `walk` sends each stay's coordinates or address, and the
+# destinations listed below, to the routing service named below, over the
+# internet. That is a third party learning which properties you are weighing
+# up. It is the only thing in this file that does that.
+#
+# It ships on, because with the default provider it needs no key and nothing to
+# sign up for, and how long the walk into town is decides more stays than the
+# price does. Set this false and no lookup ever leaves the machine — every
+# other command still works, and the walk column simply stays empty.
+#
+# (`add` and `refresh` fetch listing pages from the sites themselves, so those
+# reach the internet too — but only the site whose link you pasted, which you
+# were visiting anyway.)
+enabled = true
+
+# Who to ask. "osrm" routes over OpenStreetMap and needs no key or account;
+# "google" is the Distance Matrix and needs both.
+provider = "osrm"
+
+# OSM's public services ask to be told who is calling, and are entitled to
+# refuse traffic that pretends to be a browser. This is deliberately not the
+# user agent in [http], which exists to look like Chrome to listing sites.
+user_agent = "lodgingbuddy (+https://github.com/maravis05/lodgingbuddy)"
+
+# Not the demo server at router.project-osrm.org: it answers a request for the
+# foot profile with car timings — identical distance and duration to /driving/,
+# about 26 km/h. FOSSGIS runs an actual pedestrian profile. Getting this wrong
+# is worse than not measuring, because a 2-minute drive and the 11-minute walk
+# it really is land in different scoring bands.
+osrm_host = "routing.openstreetmap.de"
+osrm_profile = "routed-foot"
+
+# OSRM takes coordinates only, so addresses are geocoded here first. Stays that
+# already carry coordinates skip this entirely.
+geocoder_host = "nominatim.openstreetmap.org"
+
+# Both services ask for no more than one call a second. Honoured for real.
+min_interval_seconds = 1.0
+
+# Only read when provider = "google". The key comes from this environment
+# variable, never from this file, which is committed. Needs Distance Matrix
+# enabled.
 api_key_env = "GOOGLE_MAPS_API_KEY"
 host = "maps.googleapis.com"
 mode = "walking"
 
+# `address` is geocoded on first use and the answer reused for the rest of the
+# run. Giving `latitude`/`longitude` instead skips that entirely, which is worth
+# doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
+# beach. Coordinates win where both are present.
 [[destination]]
 label = "Oban town centre"
 address = "George Street, Oban PA34 5NX, UK"
@@ -212,7 +256,10 @@ weight = 0.6
 
 [[destination]]
 label = "Ferry terminal"
-address = "Oban Ferry Terminal, Railway Pier, Oban PA34 4DB, UK"
+# The postal address doesn't geocode — Nominatim has no "Railway Pier" in Oban
+# and returns nothing at all for it. The pin does.
+latitude = 56.4117438
+longitude = -5.4766190
 weight = 0.25
 
 [[destination]]

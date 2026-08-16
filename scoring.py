@@ -171,8 +171,13 @@ def complaints() -> list[str]:
             out.append(f"filters.require = {name!r} — no such amenity, so "
                        f"nothing can ever satisfy it")
     for i, dest in enumerate(config.DESTINATIONS):
-        if not dest.get("label") or not dest.get("address"):
-            out.append(f"[[destination]] #{i + 1} needs both a label and an address")
+        # Either way of saying where a place is will do. Coordinates skip the
+        # geocoder, which is the point of allowing them.
+        located = dest.get("address") or (dest.get("latitude") is not None and
+                                          dest.get("longitude") is not None)
+        if not dest.get("label") or not located:
+            out.append(f"[[destination]] #{i + 1} needs a label, and either an "
+                       f"address or a latitude and longitude")
     return out
 
 

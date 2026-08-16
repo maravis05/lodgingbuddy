@@ -100,6 +100,26 @@ DEFAULTS = {
         "require": [],
     },
     "maps": {
+        # `walk` is the one command that sends a stay's location to a third
+        # party. It ships on, because with OSRM it needs no key and nothing to
+        # sign up for, and a walk time is most of what decides a stay. Set this
+        # false and the tool never opens a connection to a routing service.
+        "enabled": True,
+        # "osrm" walks OpenStreetMap data and needs no key. "google" is the
+        # Distance Matrix and does.
+        "provider": "osrm",
+        # OSM's services ask to be told who is calling, and refuse traffic that
+        # pretends to be a browser. Deliberately not the scraping user agent.
+        "user_agent": "lodgingbuddy (+https://github.com/maravis05/lodgingbuddy)",
+        # The demo server at router.project-osrm.org answers /foot/ with car
+        # timings — same distance, same duration, 26 km/h. FOSSGIS runs a real
+        # pedestrian profile, which is the one worth asking.
+        "osrm_host": "routing.openstreetmap.de",
+        "osrm_profile": "routed-foot",
+        # Addresses become coordinates here, because OSRM only speaks lon/lat.
+        "geocoder_host": "nominatim.openstreetmap.org",
+        # Both services ask for no more than one call a second.
+        "min_interval_seconds": 1.0,
         "api_key_env": "GOOGLE_MAPS_API_KEY",
         "host": "maps.googleapis.com",
         "mode": "walking",
@@ -212,6 +232,13 @@ MAX_WALK_MINUTES = CONFIG["filters"]["max_walk_minutes"] or None
 REQUIRED_AMENITIES = CONFIG["filters"]["require"]
 
 # proximity
+MAPS_ENABLED = CONFIG["maps"]["enabled"]
+MAPS_PROVIDER = CONFIG["maps"]["provider"]
+MAPS_USER_AGENT = CONFIG["maps"]["user_agent"]
+OSRM_HOST = CONFIG["maps"]["osrm_host"]
+OSRM_PROFILE = CONFIG["maps"]["osrm_profile"]
+GEOCODER_HOST = CONFIG["maps"]["geocoder_host"]
+MAPS_MIN_INTERVAL = CONFIG["maps"]["min_interval_seconds"]
 MAPS_KEY_ENV = CONFIG["maps"]["api_key_env"]
 MAPS_HOST = CONFIG["maps"]["host"]
 MAPS_MODE = CONFIG["maps"]["mode"]

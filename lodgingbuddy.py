@@ -560,9 +560,18 @@ def cmd_refresh(args) -> int:
 def cmd_walk(args) -> int:
     """Measure how long it takes to walk from each stay to the places you named.
 
-    One call per stay rather than per destination, because the routing service
-    takes a list — and because the bill is per element either way.
+    One call per stay rather than per destination, because both providers take
+    a list of destinations and answer them together — which keeps us inside
+    OSRM's fair-use rate limit, and off Google's per-element bill.
     """
+    # Before the destination check, and before anything is loaded: if the
+    # answer is "you haven't turned this on", that's the whole reply.
+    try:
+        proximity.check_enabled()
+    except proximity.Disabled as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
     if not config.DESTINATIONS:
         print("No destinations in config.toml, so there's nothing to measure "
               "against.\nAdd a [[destination]] with a label and an address.",
@@ -593,6 +602,14 @@ def cmd_walk(args) -> int:
                 continue
             try:
                 minutes, problems = proximity.walk_times(origin, config.DESTINATIONS)
+            except proximity.Unlocatable:
+                # One stay the geocoder couldn't place. Every other stay still
+                # can be, so this is a skip and a tally, not the end of the run.
+                unlocatable += 1
+                print(f"  {rec.get('name') or '?'}: couldn't place {origin!r} — "
+                      f"try `set {key_of(rec)} --address '…'` with something "
+                      f"more specific")
+                continue
             except OSError as exc:
                 print(f"  {rec.get('name') or '?'}: {exc}")
                 continue
@@ -604,7 +621,7 @@ def cmd_walk(args) -> int:
             print(f"  {rec.get('name') or '?'}: {proximity.describe(rec)}")
             for problem in problems:
                 print(f"    {problem}")
-    except (proximity.NoKey, proximity.MapsError) as exc:
+    except (proximity.Disabled, proximity.NoKey, proximity.MapsError) as exc:
         # Whatever was measured before the service refused us is still worth
         # keeping, so this saves on the way out rather than discarding the run.
         save(stays)

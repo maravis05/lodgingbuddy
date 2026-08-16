@@ -40,6 +40,26 @@ And the command is spelled `python3` throughout, which is right on macOS and
 most Linux systems; on Windows it's `python`, or `py` if that isn't found.
 Substitute the one that works and nothing else changes between platforms.
 
+## What reaches the internet
+
+Worth saying plainly, because a tool that quietly phones out is a tool you can't
+reason about:
+
+- `add` and `refresh` fetch the listing page from the site whose link you
+  pasted — that site and no other, and one you were already visiting.
+- The **bookmarklet** sends nothing anywhere. It reads the page already open in
+  front of you and writes to your clipboard.
+- `walk` sends each stay's location and your destination list to a routing
+  service — OpenStreetMap's by default, Google's if you switch `provider`.
+  **This one is on out of the box**, and it's the only command that tells a
+  third party which properties you're weighing up. Set `enabled = false` under
+  `[maps]` in `config.toml` and no lookup ever leaves the machine.
+- Everything else — `list`, `show`, `set`, `points`, `value`, `db`, `rm` — is
+  arithmetic on the file on your disk, and works with no connection at all.
+
+Your stays live in a plain JSON file next to the script. Nothing is uploaded,
+and there's no account, telemetry or sync.
+
 ## Use
 
 Run it with no arguments and it holds a prompt open, so a browsing session is
@@ -118,7 +138,7 @@ $ python3 lodgingbuddy.py list --sort value
 | `set <id> --price N …` | fill in or correct a field |
 | `list [--sort K] [--viable]` | everything side by side |
 | `show <id> [--json]` | one stay in full, with the arithmetic shown |
-| `walk [id] [--again]` | measure the walk to your destinations |
+| `walk [id] [--again]` | measure the walk to your destinations *(makes a network call — see [What reaches the internet](#what-reaches-the-internet))* |
 | `refresh [id]` | re-fetch prices |
 | `paste [json]` | take a record from the bookmarklet |
 | `rm <id>…` | drop stays you've ruled out |
@@ -296,9 +316,51 @@ weight = 0.6
 `weight` is that destination's share of the average the walk tier scores; they
 need not sum to anything.
 
-It needs a Google Maps key with Distance Matrix enabled, read from the
-environment and never from `config.toml`, which is committed. Put the key in
-the environment the way your platform does it, then run `walk`:
+**This one makes a network call, and it's on out of the box.** `walk` is the
+only command that tells anyone where the places you're considering are: it sends
+each stay's coordinates or address, along with your destination list, to a
+routing service. Nothing else here does that. It ships on because the default
+provider costs nothing and needs no key, and because how long the walk into town
+is decides more stays than the price does.
+
+```console
+$ python3 lodgingbuddy.py walk
+  Heather Island View: Oban town centre 12m, Ferry terminal 18m
+```
+
+If you'd rather it didn't, one line in `config.toml` stops it dead:
+
+```toml
+[maps]
+enabled = false
+```
+
+Then nothing leaves the machine, `walk` says so and stops rather than failing at
+something further in, and everything else carries on — the walk column just
+stays empty, and `points` counts `walk_minutes` among its `no data:` tail rather
+than scoring a guess.
+
+One call per stay, all destinations batched. Stays already measured are skipped
+unless you pass `--again`, which is what you want after editing the destination
+list.
+
+**Which service.** `provider` takes `osrm` or `google`.
+
+`osrm` is the default and needs no key, no account and no billing profile. It
+routes over OpenStreetMap via FOSSGIS's pedestrian profile, and addresses are
+turned into coordinates by Nominatim first, since OSRM speaks only coordinates.
+Both are volunteer-run and free, so the tool identifies itself honestly in
+`[maps] user_agent` — deliberately not the browser string in `[http]` — and
+holds to one call a second. Don't lower `min_interval_seconds`.
+
+Not `router.project-osrm.org`, though. That demo server accepts a request for
+the foot profile and answers it with **car** timings: same distance, same
+duration as `/driving/`, about 26 km/h. It doesn't error, so the numbers look
+plausible and are roughly five times too small — which lands a stay in the wrong
+scoring band rather than merely mismeasuring it.
+
+`google` is Distance Matrix, and wants a key with that API enabled, read from
+the environment and never from `config.toml`, which is committed:
 
 ```console
 macOS, Linux   $ export GOOGLE_MAPS_API_KEY=…
@@ -306,17 +368,29 @@ PowerShell     > $env:GOOGLE_MAPS_API_KEY="…"
 Command Prompt > set GOOGLE_MAPS_API_KEY=…
 ```
 
-```console
-$ python3 lodgingbuddy.py walk
-  Heather Island View: Oban town centre 12m, Ferry terminal 18m
-```
-
 Each of those lasts as long as the terminal window is open, so it's once per
 session rather than once per command. To stop setting it by hand, put it in your
 shell profile on macOS and Linux, or under **Environment Variables** in the
-Windows system settings. One call per
-stay, all destinations batched. Stays already measured are skipped unless you
-pass `--again` — which is what you want after editing the destination list.
+Windows system settings.
+
+**Where OSM routing gets thin.** Pedestrian routing is only as good as the
+footway tagging underneath it, and that is excellent in cities and patchy in
+small towns. In Oban, walks from the harbour measure fine, while the north end
+of Corran Esplanade comes back `no walking route` to every destination — the
+seafront is a severed island in the foot graph, most likely because the road
+joining it to the centre is trunk-classified and the pedestrian profile won't
+use trunk roads. London and Edinburgh test clean over the same code.
+
+When that happens the destination is left out and said out loud, never guessed
+at, and `points` counts `walk_minutes` in its `no data:` tail. So a thin graph
+costs you a measurement, not a wrong one. If it costs you too many, `provider =
+"google"` is the fallback — Google's pedestrian network doesn't have the gap.
+
+Geocoding is thin in the same places. Nominatim returns nothing at all for
+`Oban Ferry Terminal, Railway Pier` — so that destination carries `latitude`
+and `longitude` instead, which any destination may do, and which skips the
+geocoder entirely. Worth doing for anywhere a postal address describes vaguely:
+a terminal, a trailhead, a beach.
 
 Straight-line distance would be free and, here, wrong: a sea loch turns six
 kilometres into a forty-minute drive, and Argyll is mostly sea lochs.
