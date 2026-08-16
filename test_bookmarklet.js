@@ -189,6 +189,75 @@ const CHARGE_CASES = [
   },
 ];
 
+// Which text the charges get read *from*, which is the half the cases above
+// can't reach: they hand parseCharges the right string themselves. So all four
+// passed while a real capture of the listing they were written from came back
+// with no taxes at all — the room selectors had landed on the short nodes
+// nested inside the block ("Private kitchen"), and a fragment of the block
+// reads exactly like a block that stated nothing.
+const SOURCE_CASES = [
+  {
+    name: "charges read off the room block",
+    rooms: "Entire apartment\nIncluded: £78 Cleaning fee per stay\n" +
+           "Excluded: 20 % VAT, 5 % City tax",
+    text: "Royal Mile Apartment\nIncluded: £78 Cleaning fee per stay\n" +
+          "Excluded: 20 % VAT, 5 % City tax",
+    want: { taxes: 2, fee: 78 }
+  },
+  {
+    name: "room block is a fragment, so the page text answers",
+    rooms: "Private kitchen\nPrivate bathroom",
+    text: "Royal Mile Apartment\nIncluded: £78 Cleaning fee per stay\n" +
+          "Excluded: 20 % VAT, 5 % City tax",
+    want: { taxes: 2, fee: 78 }
+  },
+  {
+    name: "neither states them, so nothing is invented",
+    rooms: "Private kitchen\nPrivate bathroom",
+    text: "Royal Mile Apartment\nFree cancellation before September 9, 2026",
+    want: { taxes: 0, fee: null }
+  },
+];
+
+// The listing the arithmetic in b5298a2 was checked against: 673.24 pre-tax,
+// £828.00 at checkout once the stated rates and the untaxed fee are applied.
+const BOOKING_URL =
+  "https://www.booking.com/hotel/gb/royal-mile-apartment-edinburgh-edinburgh.html" +
+  "?checkin=2026-10-09&checkout=2026-10-12&group_adults=3&no_rooms=2" +
+  "&sr_pri_blocks=1440389401_441029911_3_0_0__67324";
+
+function checkSources() {
+  let failed = 0;
+  for (const c of SOURCE_CASES) {
+    const rec = extract({
+      url: BOOKING_URL, host: "www.booking.com", jsonld: [], next: null,
+      text: c.text, dom: { rooms: c.rooms }
+    });
+    const problems = [];
+    const taxes = (rec.taxes || []).length;
+    const fee = rec.fees_included ? rec.fees_included[0].amount : null;
+    if (taxes !== c.want.taxes) {
+      problems.push(`taxes: got ${taxes}, want ${c.want.taxes}`);
+    }
+    if (fee !== c.want.fee) {
+      problems.push(`fee: got ${fee}, want ${c.want.fee}`);
+    }
+    // Reading them is only worth anything against a price, so check it came
+    // through the same capture rather than testing the rates in the abstract.
+    if (rec.native_price !== 673.24) {
+      problems.push(`native_price: got ${rec.native_price}, want 673.24`);
+    }
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
+
 function checkCharges() {
   let failed = 0;
   for (const c of CHARGE_CASES) {
@@ -239,8 +308,8 @@ function checkRooms() {
 
 const [, , path, url] = process.argv;
 if (!path && !url) {
-  const failed = checkRooms() + checkCharges();
-  const total = CASES.length + CHARGE_CASES.length;
+  const failed = checkRooms() + checkCharges() + checkSources();
+  const total = CASES.length + CHARGE_CASES.length + SOURCE_CASES.length;
   console.log(failed ? `\n${failed} failed` : `\n${total} passed`);
   process.exit(failed ? 1 : 0);
 }

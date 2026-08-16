@@ -33,11 +33,15 @@
       var el = document.querySelector(sel);
       return el ? (el.innerText || "").trim() : null;
     }
-    function texts(sel, cap) {
+    // The length cap is what keeps a page-wide selector from dragging half the
+    // document in behind a label. 120 suits the labels most callers want; a
+    // caller after a whole block says so, because for that one the long node
+    // *is* the answer and dropping it leaves the short fragments inside it.
+    function texts(sel, cap, maxLen) {
       var out = [], nodes = document.querySelectorAll(sel);
       for (var i = 0; i < nodes.length && out.length < (cap || 60); i++) {
         var t = (nodes[i].innerText || "").trim();
-        if (t && t.length < 120 && out.indexOf(t) === -1) out.push(t);
+        if (t && t.length < (maxLen || 120) && out.indexOf(t) === -1) out.push(t);
       }
       return out;
     }
@@ -66,8 +70,15 @@
       // The room table, whole, as text. Narrowing to it first keeps a
       // "Bedroom 1:" in some other property's carousel out of the answer;
       // when the selector misses, parseRooms falls back to the page text.
+      //
+      // It has to opt out of the length cap to get the table rather than the
+      // scraps: a real block runs to thousands of characters, so the default
+      // dropped it and kept only the short nodes nested inside — "Private
+      // kitchen", "Private bathroom". Which is not empty, so nothing fell
+      // back, and the tax lines two rows further down were never read.
       rooms: texts('[data-testid="property-section--content"],' +
-                   '#roomstable, .hprt-table, [data-testid="rt-room-block"]', 8)
+                   '#roomstable, .hprt-table, [data-testid="rt-room-block"]',
+                   8, 20000)
                    .join("\n") || null
     };
   }
@@ -650,8 +661,16 @@
       rec.price_candidates = money.values;
       if (money.currency) rec.currency = money.currency;
 
-      // What the price leaves out, stated under the room block.
+      // What the price leaves out, stated under the room block. A miss re-reads
+      // the whole page rather than concluding the page didn't say: the room
+      // selectors are the site's and it moves them, and landing on a fragment
+      // of the block reads exactly like a block that stated nothing. The cost
+      // of being wrong here is silent — the flat estimate stands in and the
+      // total is a plausible 20 short — so it's worth the second look.
       var charges = parseCharges(dom.rooms || ctx.text || "");
+      if (!charges.taxes && !charges.fees_included && dom.rooms) {
+        charges = parseCharges(ctx.text || "");
+      }
       if (charges.taxes) rec.taxes = charges.taxes;
       if (charges.fees_included) rec.fees_included = charges.fees_included;
 
