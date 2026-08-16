@@ -360,6 +360,16 @@
     var max = /max\.?\s*(?:people|persons?|guests?)\s*:?\s*(\d+)/i.exec(blob);
     if (max) out.sleeps = parseInt(max[1], 10);
 
+    // Booking.com states the same thing as "Sleeps: 3 adults", which the
+    // cottage sites' wording above doesn't reach. Colon-and-digit only, on the
+    // rule the bathroom count already follows: "sleeps four in comfort" in a
+    // write-up is prose, and prose is not a number. Second, because "Max
+    // people" is the harder statement of the two where a page makes both.
+    if (out.sleeps == null) {
+      var slp = /sleeps\s*:\s*(\d+)/i.exec(blob);
+      if (slp) out.sleeps = parseInt(slp[1], 10);
+    }
+
     return out;
   }
 

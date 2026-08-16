@@ -157,6 +157,21 @@ const CASES = [
     text: "Free Wifi\nPrivate bathroom\nKitchen\nThe apartment has two bathrooms.\n",
     want: { bedrooms: null, bathrooms: null, sleeps: null, beds: [] }
   },
+  {
+    // Booking.com's wording, which "Max people" doesn't reach.
+    name: "sleeps stated with a colon",
+    text: "One-Bedroom Apartment\nRecommended for 3 adults\nSleeps: 3 adults\n" +
+          "Bedroom 1: 1 full bed\nLiving room: 1 sofa bed\n",
+    want: { bedrooms: 1, bathrooms: null, sleeps: 3,
+            beds: [["Bedroom 1", 1, "full", true],
+                   ["Living room", 1, "sofa", false]] }
+  },
+  {
+    // Same rule as the bathroom count: no colon, no number.
+    name: "sleeps in prose is not a capacity",
+    text: "A bright apartment that sleeps 4 in comfort.\nFree Wifi\n",
+    want: { bedrooms: null, bathrooms: null, sleeps: null, beds: [] }
+  },
 ];
 
 // What the quoted price leaves out. The rates matter to the penny — these are
