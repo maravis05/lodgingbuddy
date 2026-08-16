@@ -89,10 +89,12 @@ The total is optional — leave it off and the stay is captured with whatever th
 site gave up. A number typed here is taken as the **final** price: quoted for
 your dates, tax included, and authoritative over anything scraped. Ctrl-D quits.
 
-One listing usually arrives as two pastes, because you don't have all of it at
-once: the bookmarklet fires on the listing page, but the real total only appears
-after you click through to book. So the total can be its own line — the lines
-after a capture know what they're about:
+A listing can still arrive as two pastes, where you don't have all of it at
+once. On Booking.com you usually will: the room block states its tax rates and
+any fee, so the checkout total is worked out for you at capture — see
+[the numbers](#the-numbers). Elsewhere the real total only shows up once you
+click through to book, so the total can be its own line, and the lines after a
+capture know what they're about:
 
 ```console
 stays> {"source":"booking.com","name":"Strathisla Oban",...}
@@ -494,12 +496,40 @@ sitting in its JSON-LD, discarded. That bed list is the honest answer to "how
 much space" — "sleeps 4" counts a sofa bed in the lounge the same as a double
 behind a door, and only one of those settles who sleeps where.
 
-**No site hands over a usable total for your dates.** Sykes publishes a "from"
-figure (shown `~`, and a 3-night stay advertised "from £1090" billed at £582).
-Booking.com only reveals the real number once you click through to book. The
-Awaze pair load pricing in a client-side widget that isn't in the page source.
-So the workflow is: capture the stay, then type the total you see at checkout —
-that number is taken as final.
+**Mostly no site hands over a usable total for your dates.** Sykes publishes a
+"from" figure (shown `~`, and a 3-night stay advertised "from £1090" billed at
+£582). The Awaze pair load pricing in a client-side widget that isn't in the
+page source. So the workflow is: capture the stay, then type the total you see
+at checkout — that number is taken as final.
+
+**Booking.com is the exception, because it shows its working.** Under each room
+block it states what the price leaves out:
+
+```
+Included: £78 Cleaning fee per stay
+Excluded: 20 % VAT, 5 % City tax
+```
+
+Which is enough to finish the sum without going to the checkout. Taxes compound
+rather than summing, and an included fee is not taxed:
+
+```
+Princes St   602.14 × 1.20 × 1.05              = 758.70   checkout: £758.70
+Royal Mile  (673.24 − 78) × 1.20 × 1.05 + 78   = 828.00   checkout: £828.00
+```
+
+Both to the penny, and no other arrangement of the same numbers lands on
+either. The rates are read off the page rather than hardcoded, so a city with a
+different levy needs no change here.
+
+A price that got there this way is marked `=` in the table, and `show` names the
+rates that went into it. Where the page doesn't state them — or states something
+that doesn't add up, like a fee larger than the price or a fee in a different
+currency from it — the old flat-VAT estimate stands and is marked `+` as before.
+It falls back rather than computing something plausible.
+
+Two checkouts is two checkouts, though. Spot-check the first few against the
+book page; a typed total still wins over anything worked out here.
 
 The two Awaze sites sit behind an AWS WAF that trips intermittently; when it
 does, the adapter falls back to what the URL alone says and keeps whatever it
@@ -649,9 +679,10 @@ only way to check the Booking.com path, which has no JSON-LD and no
 `__NEXT_DATA__` to read.
 
 Where a page shows several plausible amounts and none is clearly the total, it
-reports them as candidates rather than guessing. Booking.com only reveals the
-real total once you click through to book, so that number is worth typing in by
-hand — it's taken as final.
+reports them as candidates rather than guessing. On Booking.com the total is
+worked out from the room block's stated rates instead — see
+[the numbers](#the-numbers) — but a figure you've read off the checkout still
+beats it, and typing one in is taken as final.
 
 `refresh` never trades good data for bad: a site that answers with a bot wall
 keeps what it already had.

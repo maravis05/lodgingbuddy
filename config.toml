@@ -70,10 +70,13 @@ ok = " "
 needs_price = "·"
 blocked = "!"
 
-# Trails the all-in price to say how VAT got there.
+# Trails the all-in price to say how tax got there. `=` is the one worth
+# knowing: the page stated its rates and fees, so that figure is the arithmetic
+# done rather than a flat VAT estimate.
 [display.tax_marks]
 inclusive = ""
 added = "+"
+computed = "="
 unknown = "?"
 
 # Leads a row that fails a must-have in [filters], or that we can't tell about.

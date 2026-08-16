@@ -57,6 +57,14 @@ def blank_record() -> dict:
         # "quoted"  = the site's price for these actual dates
         # "indicative" = a "from" / headline price that may not apply
         "price_basis": None,
+        # What the quoted price leaves out, where the page said so plainly:
+        # [{"label": "VAT", "rate": 0.20}, {"label": "City tax", "rate": 0.05}]
+        # and [{"label": "Cleaning fee", "amount": 78, "currency": "GBP"}].
+        # Rates rather than a total, because the rates are the durable fact —
+        # and together they are what makes the checkout number derivable
+        # without going to the checkout. Taxes compound; an included fee is
+        # not taxed. See with_stated_charges.
+        "taxes": None, "fees_included": None,
         # Which of a property's several rates this is (occupancy, cancellation).
         "offer": None,
         # Ways this stay's bill divides, when it isn't the trip's usual split.

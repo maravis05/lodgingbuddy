@@ -125,6 +125,66 @@ def find(stays: list[dict], needle: str) -> dict | None:
 
 # ─────────────────────────────── derived math ──────────────────────────────
 
+def with_stated_charges(price: float, cur: str, rec: dict) -> float | None:
+    """The checkout total, where the page said what it was leaving out.
+
+    Booking.com prints the rates under each room block and then makes you click
+    through to see them applied. Reading them off saves that click:
+
+        Included: £78 Cleaning fee per stay
+        Excluded: 20 % VAT, 5 % City tax
+
+    Taxes compound rather than summing, and an included fee is not taxed. Both
+    checked against real checkouts — 602.14 with 20% and 5% comes to 758.70,
+    and 673.24 with a £78 cleaning fee comes to 828.00, each to the penny, and
+    no other arrangement of the same numbers does.
+
+    None when the page didn't say, which leaves the flat-VAT estimate to it.
+    A fee in a currency that isn't the price's is not subtracted from it, since
+    that would be arithmetic on two different units; it makes the whole sum
+    unanswerable and returns None rather than something plausible.
+    """
+    taxes = rec.get("taxes")
+    if not taxes:
+        return None
+
+    fees = rec.get("fees_included") or []
+    fee_total = 0.0
+    for fee in fees:
+        amount = fee.get("amount")
+        if not amount:
+            continue
+        if fee.get("currency") and cur and fee["currency"] != cur:
+            return None
+        fee_total += amount
+
+    # A fee bigger than the price it is supposedly inside means one of the two
+    # was misread, and the sum below would go negative and look deliberate.
+    if fee_total >= price:
+        return None
+
+    total = price - fee_total
+    for tax in taxes:
+        rate = tax.get("rate")
+        if rate is None or not 0 <= rate < 1:
+            return None
+        total *= 1 + rate
+    return round(total + fee_total, 2)
+
+
+def stated_charges_note(rec: dict) -> str:
+    """The sum in words: which rates went on, and what wasn't taxed."""
+    parts = [f"{t.get('rate', 0):.0%} {t.get('label') or 'tax'}"
+             for t in rec.get("taxes") or []]
+    note = "the page's own rates applied: " + " then ".join(parts)
+    fees = [f for f in rec.get("fees_included") or [] if f.get("amount")]
+    if fees:
+        note += ", on top of " + ", ".join(
+            f"{f['amount']:g} {f.get('label') or 'fee'}" for f in fees
+        ) + " which isn't taxed"
+    return note
+
+
 def all_in(rec: dict) -> tuple[float | None, str, str]:
     """The price with VAT actually in it, as (amount, currency, estimated).
 
@@ -145,6 +205,9 @@ def all_in(rec: dict) -> tuple[float | None, str, str]:
 
     included = rec.get("tax_included")
     if included is False:
+        computed = with_stated_charges(price, cur, rec)
+        if computed is not None:
+            return computed, cur, "computed"
         return price * (1 + (rec.get("vat_rate") or config.VAT_RATE)), cur, "added"
     if included is None:
         # Nobody has told us. Report the number untouched and say so — that is
@@ -489,6 +552,10 @@ def footnotes(stays, marks, gates, seen_tax, rate) -> None:
     if "added" in seen_tax:
         print(f"\n{config.TAX_MARKS.get('added', '')}  VAT added by us at "
               f"{config.VAT_RATE:.0%} — the site quoted a pre-tax price.")
+    if "computed" in seen_tax:
+        print(f"{config.TAX_MARKS.get('computed', '')}  the page stated its tax "
+              "rates and fees, so that is the arithmetic done rather than a flat "
+              "VAT estimate. `show <id>` names the rates.")
     if "unknown" in seen_tax:
         print(f"{config.TAX_MARKS.get('unknown', '')}  tax status unknown; shown "
               "as quoted. Mark it with `set <id> --incl-tax` or `--excl-tax`.")
@@ -884,6 +951,7 @@ def describe(rec: dict, rate: float | None = None) -> str:
     if amount:
         vat = rec.get("vat_rate") or config.VAT_RATE
         note = {"added": f" — VAT added by us at {vat:.0%}",
+                "computed": " — " + stated_charges_note(rec),
                 "unknown": " — VAT status unknown, shown as quoted",
                 "inclusive": " — VAT included"}[tax]
         row("All-in", f"{amount:,.2f} {cur}".strip() + note)

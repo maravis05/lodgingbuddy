@@ -10,7 +10,7 @@
  */
 
 const fs = require("fs");
-const { extract, parseRooms } = require("./bookmarklet.js");
+const { extract, parseRooms, parseCharges } = require("./bookmarklet.js");
 
 function contextFromFile(path, url) {
   const html = fs.readFileSync(path, "utf8");
@@ -159,6 +159,61 @@ const CASES = [
   },
 ];
 
+// What the quoted price leaves out. The rates matter to the penny — these are
+// what let the total be worked out without clicking through to book.
+const CHARGE_CASES = [
+  {
+    name: "taxes only, no fee",
+    text: "3 nights\nExcluded: 20 % VAT, 5 % City tax\nFree cancellation before September 9, 2026",
+    want: { taxes: [["VAT", 0.20], ["City tax", 0.05]], fees: null }
+  },
+  {
+    name: "included cleaning fee in property currency",
+    text: "3 nights\nIncluded: £78 Cleaning fee per stay\n" +
+          "Excluded: 20 % VAT, 5 % City tax\nFree cancellation",
+    want: { taxes: [["VAT", 0.20], ["City tax", 0.05]],
+            fees: [["Cleaning fee", 78, "GBP"]] }
+  },
+  {
+    // No line breaks to stop a label, so it has to stop itself.
+    name: "same block collapsed onto one line",
+    text: "3 nights Included: £78 Cleaning fee per stay " +
+          "Excluded: 20 % VAT, 5 % City tax Free cancellation before September",
+    want: { taxes: [["VAT", 0.20], ["City tax", 0.05]],
+            fees: [["Cleaning fee", 78, "GBP"]] }
+  },
+  {
+    name: "page states neither",
+    text: "3 nights\nFree cancellation before September 9, 2026\nPay nothing until",
+    want: { taxes: null, fees: null }
+  },
+];
+
+function checkCharges() {
+  let failed = 0;
+  for (const c of CHARGE_CASES) {
+    const got = parseCharges(c.text);
+    const taxes = got.taxes && got.taxes.map(t => [t.label, t.rate]);
+    const fees = got.fees_included &&
+      got.fees_included.map(f => [f.label, f.amount, f.currency]);
+    const problems = [];
+    if (JSON.stringify(taxes) !== JSON.stringify(c.want.taxes)) {
+      problems.push(`taxes: got ${JSON.stringify(taxes)}, want ${JSON.stringify(c.want.taxes)}`);
+    }
+    if (JSON.stringify(fees) !== JSON.stringify(c.want.fees)) {
+      problems.push(`fees:  got ${JSON.stringify(fees)}, want ${JSON.stringify(c.want.fees)}`);
+    }
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
+
 function checkRooms() {
   let failed = 0;
   for (const c of CASES) {
@@ -184,8 +239,9 @@ function checkRooms() {
 
 const [, , path, url] = process.argv;
 if (!path && !url) {
-  const failed = checkRooms();
-  console.log(failed ? `\n${failed} failed` : `\n${CASES.length} passed`);
+  const failed = checkRooms() + checkCharges();
+  const total = CASES.length + CHARGE_CASES.length;
+  console.log(failed ? `\n${failed} failed` : `\n${total} passed`);
   process.exit(failed ? 1 : 0);
 }
 if (!path || !url) {

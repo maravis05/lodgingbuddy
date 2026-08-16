@@ -352,6 +352,65 @@
     return out;
   }
 
+  // What the quoted price leaves out, which Booking.com states plainly under
+  // each room block and then makes you click through to see applied:
+  //
+  //     Included: £78 Cleaning fee per stay
+  //     Excluded: 20 % VAT, 5 % City tax
+  //
+  // Read as rates rather than a total, because the rates are the durable fact:
+  // Edinburgh's city tax is 5% today and the arithmetic shouldn't have to be
+  // revisited when it isn't. Both lines are optional and usually only one is
+  // there. Symbols travel with fees so the Python side can refuse to subtract
+  // a pound fee from a dollar price.
+  var SYMBOL_CURRENCY = { "£": "GBP", "$": "USD", "€": "EUR" };
+
+  // Booking.com's URL carries the property's country — /hotel/gb/… — which is
+  // what its own price is quoted in. Only the places this tool is pointed at;
+  // an unlisted country leaves the currency unknown rather than guessed, and
+  // an unknown currency is one the table declines to convert.
+  var COUNTRY_CURRENCY = {
+    gb: "GBP", uk: "GBP", ie: "EUR", fr: "EUR", es: "EUR", it: "EUR",
+    de: "EUR", nl: "EUR", pt: "EUR", be: "EUR", at: "EUR", gr: "EUR",
+    us: "USD", ca: "CAD", au: "AUD", nz: "NZD", ch: "CHF",
+    no: "NOK", se: "SEK", dk: "DKK", pl: "PLN", is: "ISK"
+  };
+
+  function parseCharges(text) {
+    var out = { taxes: null, fees_included: null };
+    if (!text) return out;
+    var blob = String(text).replace(/\r/g, "");
+
+    var ex = /excluded\s*:\s*([^\n]{0,160})/i.exec(blob);
+    if (ex) {
+      var taxes = [], t;
+      // "20 % VAT" and "5 % City tax". The label runs on through lowercase
+      // words and stops at the next capital, so "City tax" ends where "Free
+      // cancellation before…" begins — there being no comma to stop at once
+      // the text arrives with its line breaks collapsed out.
+      var taxRe = /(\d{1,2}(?:\.\d+)?)\s*%\s*([A-Za-z][A-Za-z.]{0,14}(?:\s+[a-z][A-Za-z.]{0,14}){0,3})/g;
+      while ((t = taxRe.exec(ex[1])) !== null) {
+        taxes.push({ label: t[2].trim(), rate: parseFloat(t[1]) / 100 });
+      }
+      if (taxes.length) out.taxes = taxes;
+    }
+
+    var inc = /included\s*:\s*([^\n]{0,160})/i.exec(blob);
+    if (inc) {
+      var fees = [], f;
+      var feeRe = /([£$€])\s*([\d,]+(?:\.\d{1,2})?)\s*([A-Za-z][A-Za-z ]{1,28}?)(?=\s*(?:,|per|$|\n))/gi;
+      while ((f = feeRe.exec(inc[1])) !== null) {
+        fees.push({
+          label: f[3].trim(),
+          amount: parseFloat(f[2].replace(/,/g, "")),
+          currency: SYMBOL_CURRENCY[f[1]] || null
+        });
+      }
+      if (fees.length) out.fees_included = fees;
+    }
+    return out;
+  }
+
   // Booking.com breaks its rating into categories — Cleanliness, Location,
   // Value for money — each rendered as a label and a number. Cleanliness is
   // the one worth having: it's the factor people notice and photos hide.
@@ -591,16 +650,33 @@
       rec.price_candidates = money.values;
       if (money.currency) rec.currency = money.currency;
 
+      // What the price leaves out, stated under the room block.
+      var charges = parseCharges(dom.rooms || ctx.text || "");
+      if (charges.taxes) rec.taxes = charges.taxes;
+      if (charges.fees_included) rec.fees_included = charges.fees_included;
+
       // Booking.com encodes the selected block's price in sr_pri_blocks, as
       // minor units on the end: ..._5_0_0__29363 means 293.63. That beats
       // scraping the rendered page, which shows many competing figures.
+      //
+      // It is in the *property's* currency, not the one you are being shown
+      // prices in. Checked both ways round: 602.14 there renders as $816 on
+      // screen and £758.70 at checkout, and only the second is that number
+      // plus the stated taxes. Filing it as the display currency labelled a
+      // pound figure as dollars and then let the table convert it again.
       var pri = /sr_pri_blocks=[^&]*?__(\d+)/.exec(ctx.url || "");
       if (pri) {
         var amount = parseInt(pri[1], 10) / 100;
         if (amount >= 10 && amount <= 100000) {
-          rec.price = amount;
-          // Measured against two real checkouts this runs 19-23% under the
-          // final total: it is roughly the pre-tax room rate, not the bill.
+          rec.native_price = amount;
+          // The property's country, off the URL, says which currency that is;
+          // a fee quoted with a symbol says so outright and is believed first.
+          rec.native_currency =
+            (charges.fees_included && charges.fees_included[0].currency) ||
+            (m && COUNTRY_CURRENCY[m[1]]) || null;
+          // Pre-tax room rate, not the bill. With rates and fees read off the
+          // page the Python side can finish the sum; without them it stays an
+          // estimate, which is what "indicative" has always meant here.
           rec.price_basis = "indicative";
           rec.tax_included = false;
         }
@@ -626,7 +702,8 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       extract: extract, poundAmounts: poundAmounts,
-      parseBeds: parseBeds, parseRooms: parseRooms, parseSubscores: parseSubscores,
+      parseBeds: parseBeds, parseRooms: parseRooms, parseCharges: parseCharges,
+      parseSubscores: parseSubscores,
       parseScore: parseScore, parseReviews: parseReviews,
       summarise: summarise, asProse: asProse, tidy: tidy
     };
