@@ -35,5 +35,5 @@ weight = 0.15
 # Nothing yet. A landmark table is built by reading the write-ups you've already
 # captured and noticing which places they keep naming — `show <id>` prints the
 # prose in full — and the cottage sites say much less of this than Booking.com
-# does. See edinburgh.toml for the shape, and for what the optional coordinates
+# does. See edinburgh.cityconf.toml for the shape, and for what the optional coordinates
 # are worth.

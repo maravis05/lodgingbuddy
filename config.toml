@@ -6,16 +6,19 @@
 #
 # This file is what everything shares. Two narrower layers go over it:
 #
-#   cities/edinburgh.toml   the place. What its write-ups call the castle, which
-#                           places are worth walking to, what tax is charged and
-#                           in what currency. True of every trip you ever take
-#                           there, so it is kept under the city's name and
-#                           committed — a database that names the city gets it.
+#   cities/edinburgh.cityconf.toml
+#       the place. What its write-ups call the castle, which places are worth
+#       walking to, what tax is charged and in what currency. True of every trip
+#       you ever take there, so it is kept under the city's name and committed —
+#       a database that names the city gets it.
 #
-#   <db>.toml               the trip. Which city this database is in, and
-#                           anything true of this one and not of the place:
-#                           how many ways the bill splits, a must-have that
-#                           only matters this time.
+#   <db>.dbconf.toml
+#       the trip. Which city this database is in, and anything true of this one
+#       and not of the place: how many ways the bill splits, a must-have that
+#       only matters this time. Sits beside the <db>.db.json it belongs to.
+#
+# Each says in its own name which of the three it is, so a database named after
+# the city it is in still gives you three files you can tell apart at a glance.
 #
 # Tables merge key by key; a list in a narrower file replaces the list here
 # outright. [storage] is the exception and is only ever read from this file,
@@ -24,8 +27,8 @@
 
 [storage]
 # Where captured stays are kept. A relative path sits next to the script.
-file = "stays.json"
-# Every other .json in that same folder is a database too, and `db <name>`
+file = "stays.db.json"
+# Every other .db.json in that same folder is a database too, and `db <name>`
 # moves between them — real candidates in one, throwaway examples in another,
 # without a flag on every line. The choice sticks until you change it, so the
 # prompt is named after the database you're in. LODGINGBUDDY_DB wins for a
@@ -325,7 +328,7 @@ require = []
 # ── Where you want to be, and what the write-ups there name ───────────────
 #
 # `[[destination]]` and `[[landmark]]` are both facts about a city, so both live
-# in that city's file — cities/edinburgh.toml, cities/oban.toml. A trip with two
+# in that city's file — cities/edinburgh.cityconf.toml. A trip with two
 # legs still in play is two databases naming two cities, and neither leg's
 # numbers move while you work on the other.
 #

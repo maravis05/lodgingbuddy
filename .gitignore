@@ -2,15 +2,17 @@ __pycache__/
 *.pyc
 
 # Your captured stays — real dates, prices and plans, in however many databases
-# you keep them in. Track these only if you mean to publish the trip.
+# you keep them in: <name>.db.json. Track these only if you mean to publish the
+# trip. Left as *.json rather than *.db.json so that anything you kept under the
+# old name, or off in a folder of its own, stays just as unpublished.
 *.json
 
 # Which database `db` last left you in.
 .lodgingbuddy-db
 
-# Each database's own settings — which city it's in, and anything true of that
-# trip alone. Yours, like the stays they sit beside. cities/*.toml is the half
-# worth committing, and isn't matched by this.
+# Each database's own settings — <name>.dbconf.toml, which city it's in and
+# anything true of that trip alone. Yours, like the stays they sit beside.
+# cities/*.cityconf.toml is the half worth committing, and isn't matched here.
 /*.toml
 !/config.toml
 

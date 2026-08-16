@@ -11,13 +11,17 @@ not a preference but a fact about a place: what the write-ups there call the
 castle, which places are worth walking to, what tax is charged and in what
 currency. None of that is about the trip — it is as true of the fortnight you
 spent pricing Edinburgh last year as of the weekend you price tomorrow — so it
-lives in cities/edinburgh.toml, under the city's name, and is worth keeping and
-worth sharing. Point a second database at the same city and it arrives knowing
-the place.
+lives in cities/edinburgh.cityconf.toml, under the city's name, and is worth
+keeping and worth sharing. Point a second database at the same city and it
+arrives knowing the place.
 
-The trip is the thin layer on top: <db>.toml beside <db>.json, which says which
-city this database is in and holds anything true of this trip alone — how many
-ways the bill splits, a must-have that only matters this time.
+The trip is the thin layer on top: <db>.dbconf.toml beside <db>.db.json, which
+says which city this database is in and holds anything true of this trip alone —
+how many ways the bill splits, a must-have that only matters this time.
+
+Three kinds of file, and each says in its own name which kind it is, because a
+trip named after the city it is in would otherwise give you edinburgh.toml and
+cities/edinburgh.toml and nothing but the folder to tell them apart.
 
 Which means every name below can change while the process is running, and
 nothing may take a copy at import: read `config.X` at the point of use, the way
@@ -45,11 +49,41 @@ PATH = Path(os.environ.get("LODGINGBUDDY_CONFIG") or HERE / "config.toml")
 # renamed under you is worse than one that won't open.
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
+# What each kind of file is called, past its name. The extension alone would
+# say TOML and JSON, which is what a program needs and not what you need at
+# half past eleven looking at a folder: `edinburgh.cityconf.toml` is the city,
+# `edinburgh.dbconf.toml` is the trip in it, `edinburgh.db.json` is what you
+# captured. A database and its settings still share a stem and still sit side
+# by side, so neither can be moved away from the other by accident.
+CITY_SUFFIX = ".cityconf.toml"
+DB_CONF_SUFFIX = ".dbconf.toml"
+DB_SUFFIX = ".db.json"
+
+# Everything a name can arrive wearing and still be that name. Tab completion
+# hands you the whole filename, and the whole filename is what you were just
+# looking at — longest first, so `edinburgh.cityconf.toml` doesn't come back as
+# `edinburgh.cityconf` on the strength of its last four characters.
+SUFFIXES = tuple(sorted((CITY_SUFFIX, DB_CONF_SUFFIX, DB_SUFFIX, ".toml",
+                         ".json"), key=len, reverse=True))
+
+
+def bare(filename: str) -> str:
+    """A filename with whatever kind of file it is taken off the end.
+
+    Path.stem won't do it: these names have two dots in them and stem only ever
+    drops the last one, so edinburgh.db.json would come back as edinburgh.db.
+    """
+    for suffix in SUFFIXES:
+        if filename.endswith(suffix):
+            return filename[: -len(suffix)]
+    return filename
+
+
 DEFAULTS = {
     # `cities` sits beside the code rather than beside the stays: a city config
     # is knowledge about a place, shared and committed, where the stays are
     # yours and are not.
-    "storage": {"file": "stays.json", "cities": "cities"},
+    "storage": {"file": "stays.db.json", "cities": "cities"},
     "http": {
         "user_agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -272,11 +306,13 @@ BASE = _merge(DEFAULTS, _read(PATH))
 STORE = Path(BASE["storage"]["file"])
 if not STORE.is_absolute():
     STORE = HERE / STORE
-# Databases are named files in one folder — stays.json is "stays" — and `db`
+# Databases are named files in one folder — stays.db.json is "stays" — and `db`
 # switches between them. Derived from `file` rather than set separately so an
 # existing store needs no migration and new ones land beside it.
 STORE_DIR = STORE.parent
-DEFAULT_DB = STORE.stem
+# .stem would leave "stays.db", and a config file still naming stays.json is a
+# config file that should still work.
+DEFAULT_DB = bare(STORE.name)
 
 # Cities are named files in a folder of their own, beside the code rather than
 # beside the stays. What is in them is knowledge about a place — worth keeping,
@@ -289,9 +325,7 @@ if not CITIES_DIR.is_absolute():
 
 def name_of(text: str, what: str = "name") -> str:
     """A file-safe name, or a complaint about why that isn't one."""
-    name = (text or "").strip()
-    if name.endswith(".toml"):
-        name = name[: -len(".toml")]
+    name = bare((text or "").strip())
     if not NAME.fullmatch(name):
         raise ValueError(f"{text!r} can't be a {what} — letters, digits, dot, "
                          f"dash and underscore, starting with a letter or digit.")
@@ -299,26 +333,82 @@ def name_of(text: str, what: str = "name") -> str:
 
 
 def city_path(city: str) -> Path:
-    """Where one city's settings live: cities/edinburgh.toml."""
-    return CITIES_DIR / (name_of(city, "city") + ".toml")
+    """Where one city's settings live: cities/edinburgh.cityconf.toml."""
+    return CITIES_DIR / (name_of(city, "city") + CITY_SUFFIX)
 
 
 def db_path(db: str) -> Path:
-    """One database's own settings: stays.toml, beside stays.json.
+    """One database's own settings: stays.dbconf.toml, beside stays.db.json.
 
     Thin on purpose. Its job is to name the city — that is the association, and
     a file beside the database is the one place that can't be separated from it
     — and to hold whatever is true of this trip and not of the place.
     """
-    return STORE_DIR / (name_of(db, "database") + ".toml")
+    return STORE_DIR / (name_of(db, "database") + DB_CONF_SUFFIX)
 
 
 def cities() -> list[str]:
     """Every city there is a config for."""
     try:
-        return sorted(p.stem for p in CITIES_DIR.glob("*.toml"))
+        return sorted(bare(p.name) for p in CITIES_DIR.glob("*" + CITY_SUFFIX))
     except OSError:
         return []
+
+
+def _old(folder: Path, ext: str) -> list[Path]:
+    """Files in `folder` still wearing a plain extension and nothing more."""
+    try:
+        found = list(folder.glob("*" + ext))
+    except OSError:
+        return []
+    return sorted(p for p in found
+                  if not p.name.endswith((CITY_SUFFIX, DB_CONF_SUFFIX, DB_SUFFIX))
+                  and p.resolve() != PATH.resolve()
+                  and NAME.fullmatch(bare(p.name)))
+
+
+def migrate() -> list[str]:
+    """Rename anything left under the old scheme, and say what moved.
+
+    Before this, all three were <name>.toml or <name>.json and only the folder
+    said which was which. Renaming is done for you rather than left as a note
+    in a changelog because the stays are yours and aren't in git: a tool that
+    started up, found no stays.json under the name it now looks for, and
+    reported an empty database would be the worst way to learn the names had
+    changed.
+
+    Only ever moves onto a name nothing is using, and only for files whose name
+    would still be a name. Anything else is left where it is and said out loud.
+    """
+    jobs = [(p, DB_SUFFIX) for p in _old(STORE_DIR, ".json")]
+    jobs += [(p, DB_CONF_SUFFIX) for p in _old(STORE_DIR, ".toml")]
+    # With one folder for both there is no telling a city from a trip by name,
+    # which is the whole reason for the new ones — so say so and touch nothing.
+    together = CITIES_DIR.resolve() == STORE_DIR.resolve()
+    if not together:
+        jobs += [(p, CITY_SUFFIX) for p in _old(CITIES_DIR, ".toml")]
+    if not jobs:
+        return []
+    if together:
+        return [f"{STORE_DIR} holds both the cities and the databases, so the "
+                f"old names can't say which file is which. Rename them by hand: "
+                f"a city becomes <name>{CITY_SUFFIX}, a trip <name>"
+                f"{DB_CONF_SUFFIX}, a database <name>{DB_SUFFIX}."]
+
+    said = []
+    for path, suffix in jobs:
+        target = path.with_name(bare(path.name) + suffix)
+        if target.exists():
+            said.append(f"{path.name} kept its old name — {target.name} is "
+                        f"already there, so nothing was moved")
+            continue
+        try:
+            path.rename(target)
+        except OSError as exc:
+            said.append(f"couldn't rename {path.name} to {target.name}: {exc}")
+        else:
+            said.append(f"renamed {path.name} → {target.name}")
+    return said
 
 
 def city_of(db: str) -> str | None:
@@ -574,7 +664,8 @@ def start_city(city: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text(
-            CITY_TEMPLATE.format(title=path.stem.replace("-", " ").title()),
+            CITY_TEMPLATE.format(
+                title=bare(path.name).replace("-", " ").title()),
             encoding="utf-8")
     return path
 
@@ -592,7 +683,8 @@ def set_city(db: str, city: str) -> Path:
     line = f'city = "{city}"'
     if not path.exists():
         path.write_text(
-            f"# {db} — this database's own settings, over cities/{city}.toml and\n"
+            f"# {db} — this database's own settings, over "
+            f"{CITIES_DIR.name}/{city}{CITY_SUFFIX} and\n"
             f"# {PATH.name}. What belongs here is what's true of this trip rather\n"
             f"# than of the city: how many ways the bill splits, a must-have that\n"
             f"# only matters this time.\n\n{line}\n", encoding="utf-8")

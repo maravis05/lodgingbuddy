@@ -6,10 +6,10 @@ choosing between and a pile of examples gathered to sharpen the scoring both
 want capturing, and mixing them ruins both — invented candidates in the table
 you're deciding from, real ones buried in practice data.
 
-A database is a name and a file. `examples` is examples.json sitting beside
-stays.json, and that's the whole scheme: every .json in the store folder is one,
-so starting another means naming it and moving between them means saying the
-name once.
+A database is a name and a file. `examples` is examples.db.json sitting beside
+stays.db.json, and that's the whole scheme: every .db.json in the store folder
+is one, so starting another means naming it and moving between them means
+saying the name once.
 
 Once, rather than every time — the name is remembered in a pointer file next to
 the databases. Which is exactly why the prompt is named after the database
@@ -34,7 +34,9 @@ from pathlib import Path
 import config
 
 ENV = "LODGINGBUDDY_DB"
-SUFFIX = ".json"
+# Named in config.py with the other two, so the three kinds of file are decided
+# in one place and `bare` knows about all of them.
+SUFFIX = config.DB_SUFFIX
 
 # The pointer lives with the databases rather than in config.toml. That file is
 # yours and full of comments, and a tool that rewrote it every time you switched
@@ -45,14 +47,12 @@ def name_of(text: str) -> str:
     """A database name from whatever was typed.
 
     The filename counts, since that's what's in the folder and what you'll have
-    just been looking at — `examples.json` and `examples` are the same ask. The
-    rule about what a name may contain is config.NAME, shared with the cities so
-    that both halves of a trip can always be a file.
+    just been looking at — `examples.db.json` and `examples` are the same ask,
+    and so is the `examples.dbconf.toml` beside it. The rule about what a name
+    may contain is config.NAME, shared with the cities so that both halves of a
+    trip can always be a file.
     """
-    name = (text or "").strip()
-    if name.endswith(SUFFIX):
-        name = name[: -len(SUFFIX)]
-    return config.name_of(name, "database name")
+    return config.name_of(text, "database name")
 
 
 def path_of(name: str) -> Path:
@@ -87,7 +87,8 @@ def current() -> str:
     """The database everything reads and writes right now.
 
     Which also settles which settings are in force, so this is where that gets
-    said. A database names the city it is in — stays.toml beside stays.json —
+    said. A database names the city it is in — stays.dbconf.toml beside
+    stays.db.json —
     and the city is most of what the settings are; the alternative to loading
     them here is every caller remembering to, which is the same as some of them
     not.
@@ -108,7 +109,7 @@ def names() -> list[str]:
     capture into before either has a file, and a list that omitted the database
     you're standing in would be a strange thing to read.
     """
-    found = {p.stem for p in config.STORE_DIR.glob("*" + SUFFIX)}
+    found = {config.bare(p.name) for p in config.STORE_DIR.glob("*" + SUFFIX)}
     return sorted(found | {config.DEFAULT_DB, current()})
 
 

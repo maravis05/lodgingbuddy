@@ -1141,8 +1141,8 @@ def cmd_walk(args) -> int:
     if not wanted:
         elsewhere = " (the ones there name other databases)" if config.DESTINATIONS else ""
         fix = (f"Add a [[destination]] with a label and an address to "
-               f"{config.CITIES_DIR.name}/{config.CITY}.toml, and every database "
-               f"in {config.CITY} gets it." if config.CITY else
+               f"{config.CITIES_DIR.name}/{config.CITY}{config.CITY_SUFFIX}, "
+               f"and every database in {config.CITY} gets it." if config.CITY else
                f"{db} isn't in a city yet — `db {db} --city <name>` names one, "
                f"and its destinations come with it.")
         print(f"No destinations for {db} in {config.where()}{elsewhere}, so "
@@ -2004,6 +2004,16 @@ def cmd_watch(args) -> int:
 
 
 def main() -> int:
+    # Before anything asks for a file by name, since what this does is put the
+    # files under the names everything else now asks for. Silent when there is
+    # nothing left to rename, which is every run after the first.
+    if moved := config.migrate():
+        print(f"  Files are named by kind now — {config.DB_SUFFIX}, "
+              f"{config.DB_CONF_SUFFIX}, {config.CITY_SUFFIX}:",
+              file=sys.stderr)
+        for line in moved:
+            print(f"    {line}", file=sys.stderr)
+
     # Before argparse, because the parser below bakes settings into its own help
     # and defaults — the sort, the share label, the currency pair — and which
     # database we're in is what decides those. Everything after this point sees

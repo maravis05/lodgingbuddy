@@ -217,11 +217,17 @@ fitting handles those better, because what it fits is the stretch people mean.
 ## Storage
 
 Stays are a JSON list, one file per database, in the folder holding
-`storage.file`. `stays.json` is the database named `stays`; any other `*.json`
-beside it is another. `db <name>` switches and remembers the choice in
-`.lodgingbuddy-db`; `LODGINGBUDDY_DB` overrides it for one run without moving
-the pointer. A database also keeps `<name>.toml` beside its `<name>.json`,
-naming the city it is in — see Cities and trips below.
+`storage.file`. `stays.db.json` is the database named `stays`; any other
+`*.db.json` beside it is another. `db <name>` switches and remembers the choice
+in `.lodgingbuddy-db`; `LODGINGBUDDY_DB` overrides it for one run without moving
+the pointer. A database also keeps `<name>.dbconf.toml` beside its
+`<name>.db.json`, naming the city it is in — see Cities and trips below.
+
+Each of the three kinds of file says which kind it is in its own name, so a
+database named after the city it is in is still three files you can tell apart:
+`edinburgh.db.json`, `edinburgh.dbconf.toml`, `cities/edinburgh.cityconf.toml`.
+Files left under the older plain `.json` and `.toml` names are renamed on the
+next run, and the tool says what it moved.
 
 The record schema is `sources.blank_record()` — identity, location, dates and
 party, price and tax, property shape and beds, amenities and traits, ratings
@@ -237,7 +243,8 @@ the script.
 
 Four layers, each merged over the one before: `config.DEFAULTS` in `config.py`,
 then `config.toml`, then the city the active database is in
-(`cities/<city>.toml`), then the database's own `<db>.toml`. The tool runs with
+(`cities/<city>.cityconf.toml`), then the database's own `<db>.dbconf.toml`.
+The tool runs with
 no config file at all, and a file setting three keys overrides three keys.
 Tables merge key by key; lists (sources, destinations, landmarks) replace
 wholesale. `[storage]` is read only from `config.toml`, since it says where the
@@ -273,13 +280,15 @@ ignored.
 
 A database is a trip; a trip is in a city. The city is the reusable half.
 
-`cities/edinburgh.toml` holds what is true of Edinburgh however often you go:
+`cities/edinburgh.cityconf.toml` holds what is true of Edinburgh however often
+you go:
 which landmarks its write-ups name and how they spell them, the destinations
 worth measuring to, what tax is charged and in what currency, and any weights
 that read differently there. These are committed — a city you have worked out
 once is worth keeping and worth someone else having.
 
-`<db>.toml` beside `<db>.json` names the city and holds whatever is true of
+`<db>.dbconf.toml` beside `<db>.db.json` names the city and holds whatever is
+true of
 this trip alone (how many ways the bill splits, a must-have that only matters
 this time). It is one line most of the time, and is not committed.
 
@@ -307,8 +316,9 @@ Nominatim cover the world.
 The landmark table is the part worth building deliberately. Capture a dozen
 listings first, read the write-ups (`show <id>` prints them in full), and write
 down the places they keep naming — that is what turns "8 minutes from the
-station" into a figure in the walk column. `cities/edinburgh.toml` is a worked
-example; `cities/oban.toml` is one with destinations and no landmarks yet.
+station" into a figure in the walk column. `cities/edinburgh.cityconf.toml` is
+a worked example; `cities/oban.cityconf.toml` is one with destinations and no
+landmarks yet.
 
 Needs code:
 
@@ -338,8 +348,9 @@ proximity.py          walking times (OSRM / Google), geocoding
 database.py           which set of stays is active
 config.py             defaults, and the three overlays over them
 config.toml           settings everything shares
-cities/<city>.toml    one place: its landmarks, destinations, rates
-<db>.toml             one trip: which city it's in, and its own overrides
+cities/<city>.cityconf.toml   one place: its landmarks, destinations, rates
+<db>.dbconf.toml              one trip: which city it's in, and its overrides
+<db>.db.json                  one trip's captured stays
 bookmarklet.js        in-page extractor
 build_bookmarklet.py  builds the three installable forms
 test_bookmarklet.js   unit checks for the extractor
