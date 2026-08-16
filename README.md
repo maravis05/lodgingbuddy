@@ -224,7 +224,10 @@ per stay with `set <id> --shares N`.
 
 Where a property's own price is known it beats the OTA's converted one, which
 has FX markup baked in. A "from" price is marked `~` and is not a quote for your
-dates — click through and `set` the real total.
+dates — click through and `set` the real total. A price marked `=` never carries
+`~`: the sum was finished from the page's own rates, so it is what the checkout
+charges for the dates in the link, and hedging it would be a claim about it that
+isn't true.
 
 ## Everything that isn't cost
 

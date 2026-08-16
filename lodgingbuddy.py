@@ -216,6 +216,22 @@ def all_in(rec: dict) -> tuple[float | None, str, str]:
     return price, cur, "inclusive"
 
 
+def from_mark(rec: dict, tax: str) -> str:
+    """`~` where the figure is a "from" price rather than a total for the dates.
+
+    The mark makes two claims — that this is a "from" price, and that it isn't
+    a quote for your dates — and neither survives the page having stated its
+    own rates. Where the sum was finished from them the number is what the
+    checkout charges for the dates in the link, to the penny, and hedging it
+    would be false. Where it wasn't, the hedge stays: it is the thing that gets
+    the real total typed in, which is worth more than a tidier table.
+
+    Takes the tax path rather than reading it back off the record, so it can't
+    disagree with the arithmetic that produced the number beside it.
+    """
+    return "~" if rec.get("price_basis") == "indicative" and tax != "computed" else ""
+
+
 def converted(amount: float | None, cur: str, rate: float | None) -> tuple[float | None, str]:
     if amount and rate and cur == config.BASE_CURRENCY:
         return amount * rate, config.QUOTE_CURRENCY
@@ -511,7 +527,7 @@ def cmd_list(args) -> int:
         amount, cur = converted(amount, cur, rate)
         if not amount:
             return "—"
-        return (("~" if rec.get("price_basis") == "indicative" else "")
+        return (from_mark(rec, tax)
                 + f"{amount:,.0f} {cur}".strip() + config.TAX_MARKS.get(tax, ""))
 
     ctx = {"rate": rate, "money": money, "score": lambda r: marks[key_of(r)]}
@@ -546,7 +562,9 @@ def footnotes(stays, marks, gates, seen_tax, rate) -> None:
     command that clears it — a glyph you have to go and look up is worse than
     no glyph.
     """
-    if any(r.get("price_basis") == "indicative" for r in stays):
+    # Same predicate as the column, so the note can't turn up explaining a mark
+    # that isn't in the table above it.
+    if any(from_mark(r, all_in(r)[2]) for r in stays):
         print("\n~  a \"from\" price, not a quote for these dates — click through "
               "and set the real total with `set <id> --price`.")
     if "added" in seen_tax:
@@ -1106,8 +1124,7 @@ def confirm(rec: dict, candidates: list, rate: float | None) -> str:
     if rec.get("nights"):
         bits.append(f"{rec['nights']} nts")
     if amount:
-        soft = "~" if rec.get("price_basis") == "indicative" else ""
-        bits.append(f"{soft}{amount:,.0f} {cur}".strip()
+        bits.append(f"{from_mark(rec, tax)}{amount:,.0f} {cur}".strip()
                     + config.TAX_MARKS.get(tax, "") + " all-in")
     if psn:
         bits.append(f"{psn:,.0f}/{config.SHARE_LABEL}/nt")
