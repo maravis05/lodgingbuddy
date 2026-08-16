@@ -247,7 +247,8 @@ def complaints() -> list[str]:
     import summary
 
     known_bonuses = (set(sources.AMENITY_ALIASES) | set(summary.TRAITS)
-                     | set(summary.KINDS) | {"second_bathroom"})
+                     | set(summary.NEARBY) | set(summary.KINDS)
+                     | {"second_bathroom"})
     out = []
     # Not a settings problem but a code one, and this is the only place that
     # sees both lists. summary.py fills `amenities` using its own patterns; if
@@ -316,9 +317,9 @@ def bonus_facts(rec: dict) -> dict[str, bool]:
     way to weight it is downward.
     """
     baths = rec.get("bathrooms") or 0
-    traits = set(rec.get("traits") or [])
+    said = set(rec.get("traits") or []) | set(rec.get("nearby") or [])
     kind = rec.get("kind")
-    facts = {name: has(rec, name) or name in traits or name == kind
+    facts = {name: has(rec, name) or name in said or name == kind
              for name in config.BONUSES}
     # One of them isn't a flag at all but a count, and reads better named than
     # written as a tier with a single band.

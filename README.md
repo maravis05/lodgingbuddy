@@ -480,18 +480,41 @@ so this needs no gazetteer and works the same in Bordeaux. It fits the museum to
 within 81 m from prose alone. It is a blunt instrument by design: it throws out
 claims wrong by a factor of three, and forgives everything else.
 
-Under each row `list` prints one line of it — what kind of place it is, who
-sleeps where, the traits, and the nearest places the listing bothered to time:
+Under each row `list` answers the two questions the columns can't:
 
 ```
-   Calton Hill Apartment    1br 1ba  3  ≈7m  605 GBP=  101  90%  77  19.1
-    ↳ apt · 1 full, 1 sofa · bath, private bathroom, hairdryer · 6m Waverley, 6m Playhouse
+   Calton Hill Apartment           booking.com  1br 1ba  3    ≈7m   605 GBP=   101       90%    77   19.1
+    ↳ inside  1 double + sofa bed in the living room · apt · bath, private bathroom
+    ↳ nearby  6m Waverley, 6m Playhouse, 8m Royal Mile, 13m the Museum
+   Theknightresidence              booking.com  2br 2ba  3    —     811 GBP=   135       89%    92   17
+    ↳ inside  1 double, 2 singles + sofa bed in the living room · apt · licensed
+    ↳ nearby  5m Grassmarket, 10m Princes Street · restaurants, bars & pubs, shops, a park
 ```
 
-One line, always, fitted to your terminal — a two-line row in a thirty-row table
-costs more than the second line is worth. What gets cut when it won't fit is the
-walks first, then the least distinguishing traits, and the tail says how many
-went.
+**inside** leads with how the party actually divides up. `1br` is the same two
+characters whether the third person gets a room or the sofa, and which of those
+it is decides the stay — so the sofa, and the room it's in, survives every
+squeeze. Where no layout was published the bedroom count stands in. Then what
+kind of place it is, and the traits that set this one apart from the others.
+
+**nearby** is the landmarks the listing timed, nearest first and capped at half
+an hour, then the neighbourhood — which has no landmark, no coordinates and no
+column, and is still most of what makes a street worth staying on. "Bars,
+restaurants, shops and pubs within 5 minutes' walk" is read as
+`nightlife_nearby, food_nearby, shops_nearby`, and each is weightable in
+`[scoring.bonuses]` like anything else.
+
+That reading is deliberately plural-only. A singular "restaurant" is the hotel's
+own dining room and a "garden" is the patch behind the building; taking either
+for a neighbourhood would put a night out within reach of a country hotel with a
+bar. It under-claims as a result — `culture_nearby` fires once across the thirty
+Edinburgh stays, because they name the museum rather than claiming there are
+museums, and a named museum arrives with minutes attached, which is better.
+
+Both rows are one line each, fitted to your terminal and never wrapped — a row
+that wraps turns thirty stays into ninety lines and the table stops being
+scannable. What gets cut is always the least distinguishing thing on it, and the
+tail says how many went.
 
 Which traits earn the room is decided per table rather than by a fixed order:
 the ones that could change your mind first, and within those the ones fewest of
@@ -500,10 +523,11 @@ flats and settles nothing; `adults_only` is true of one. Filter the table and it
 re-ranks, because a trait they all share has stopped saying anything about any
 of them.
 
-Nothing on that line says which part of the page a fact came from. It all came
+Nothing on either row says which part of the page a fact came from. It all came
 off the same page, and flagging half of it would rank facts by their
-typesetting. `--no-facts` drops the line for one run, `[display] facts = "off"`
-for good, and there are `kind` and `traits` columns if you would rather keep the
+typesetting. `[display] facts` takes `"lines"` for both, `"line"` for just
+**inside**, and `"off"` for neither; `list --no-facts` turns them off for one
+run, and there are `kind` and `traits` columns if you would rather keep the
 table one row per stay.
 
 ## How far is it, really

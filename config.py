@@ -51,7 +51,7 @@ DEFAULTS = {
         # What the write-up said, under each row. "line" is a second indented
         # line per stay; "off" is columns only. There are `kind` and `traits`
         # columns too, for a table you'd rather keep one row per stay.
-        "facts": "line",
+        "facts": "lines",
         # An upper bound on the traits that line will name, not a target — the
         # width of the terminal is what actually decides, since the line is
         # fitted to it and never wraps.
@@ -111,6 +111,11 @@ DEFAULTS = {
             "soundproofed": 4, "free_parking": 3, "adults_only": 2,
             "lift": 2, "self_check_in": 2,
             "visitor_levy": -3, "limited_parking": -2,
+            # What's around it. The neighbourhood has no landmark to measure
+            # to and decides as much as the walk to one does.
+            "food_nearby": 5, "nightlife_nearby": 3, "groceries_nearby": 3,
+            "shops_nearby": 2, "green_nearby": 2, "culture_nearby": 2,
+            "transport_nearby": 2,
         },
     },
     # Gates, not preferences. A stay that fails one is kept and marked, never
@@ -243,7 +248,7 @@ NAME_WIDTH = CONFIG["display"]["name_width"]
 SOURCE_WIDTH = CONFIG["display"]["source_width"]
 WHERE_WIDTH = CONFIG["display"]["where_width"]
 COLUMNS = CONFIG["display"]["columns"]
-FACTS_LINE = CONFIG["display"]["facts"] == "line"
+FACTS = CONFIG["display"]["facts"]
 FACTS_TRAITS = CONFIG["display"]["facts_traits"]
 STATUS_MARKS = CONFIG["display"]["status_marks"]
 TAX_MARKS = CONFIG["display"]["tax_marks"]

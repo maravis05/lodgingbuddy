@@ -327,6 +327,39 @@ _TRAITS = {k: re.compile(v, re.I) for k, v in _TRAITS.items()}
 # Every slug this module will ever put in `traits`, for config to validate against.
 TRAITS = frozenset(_TRAITS)
 
+# What is around the place, as opposed to in it. A named landmark comes with a
+# distance and is handled elsewhere; this is the other half of "what's nearby" —
+# the neighbourhood, which no listing gives coordinates for and which is most of
+# what makes a street worth staying on.
+#
+# Plural and generic, both deliberately. The neighbourhood is always plural —
+# "bars, restaurants, shops and pubs" — while a singular is either a landmark
+# with a name or the property's own: `restaurant` is the hotel's dining room and
+# already a trait, `garden` is the patch behind the building and already an
+# amenity, and reading either as a neighbourhood would put a night out within
+# reach of a country hotel with a bar. Every match this makes across the thirty
+# Edinburgh write-ups is a real claim about the surrounding streets.
+#
+# It under-claims and that is the right way round. `culture` fires once, because
+# these summaries name the museum rather than saying there are museums — and a
+# named museum arrives with minutes attached, which is better.
+_NEARBY = {
+    "food_nearby": r"\brestaurants\b|\bcafes\b|\bcafés\b|\beateries\b"
+                   r"|places\s+to\s+eat|food\s+and\s+drinks?",
+    "nightlife_nearby": r"\bbars\b|\bpubs\b|\bclubs\b|\bnightlife\b",
+    "shops_nearby": r"\bshops\b|\bshopping\b|\bboutiques\b",
+    "groceries_nearby": r"\bsupermarkets?\b|\bgrocery\b",
+    "culture_nearby": r"\bmuseums\b|\bgalleries\b|\btheat(?:re|er)s\b|\bcinemas?\b",
+    "green_nearby": r"\bparkland\b|\bpublic\s+park\b|a\s+beautiful\s+park"
+                    r"|\bgreen\s+space\b|the\s+Meadows\b|Princes\s+Street\s+Gardens"
+                    r"|Botanic\s+Gardens?",
+    "transport_nearby": r"public\s+transport|regular\s+buss?es|\bbus\s+stops?\b"
+                        r"|\btrams?\b|\bby\s+bus\b",
+}
+_NEARBY = {k: re.compile(v, re.I) for k, v in _NEARBY.items()}
+
+NEARBY = frozenset(_NEARBY)
+
 # What a property is. Also a trait as far as config.toml is concerned, but it is
 # one answer out of four rather than a flag, so it gets its own field.
 KINDS = ("apartment", "aparthotel", "hotel", "guesthouse")
@@ -372,6 +405,7 @@ class Reading:
     bathrooms_at_least: bool = False
     amenities: set[str] = field(default_factory=set)
     traits: set[str] = field(default_factory=set)
+    nearby: set[str] = field(default_factory=set)
     claims: list[Claim] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     machine_written: bool = False
@@ -503,6 +537,7 @@ def read(record: dict) -> Reading:
 
     out.amenities = {k for k, p in _AMENITIES.items() if p.search(text)}
     out.traits = {k for k, p in _TRAITS.items() if p.search(text)}
+    out.nearby = {k for k, p in _NEARBY.items() if p.search(text)}
 
     out.claims = _claims(_mask_name(text, record.get("name")))
     _doubt(out.claims, record)
@@ -702,12 +737,13 @@ class Verdict:
     conflicts: dict = field(default_factory=dict)  # (record value, text value)
     new_amenities: set = field(default_factory=set)
     new_traits: set = field(default_factory=set)
+    new_nearby: set = field(default_factory=set)
     claimed_walk: dict = field(default_factory=dict)
     doubted: list = field(default_factory=list)
 
     def anything(self) -> bool:
         return bool(self.fills or self.new_amenities or self.new_traits
-                    or self.claimed_walk or self.conflicts)
+                    or self.new_nearby or self.claimed_walk or self.conflicts)
 
 
 def against(record: dict, reading: Reading) -> Verdict:
@@ -735,6 +771,7 @@ def against(record: dict, reading: Reading) -> Verdict:
 
     v.new_amenities = reading.amenities - set(record.get("amenities") or [])
     v.new_traits = reading.traits - set(record.get("traits") or [])
+    v.new_nearby = reading.nearby - set(record.get("nearby") or [])
     v.claimed_walk = reading.walk_minutes()
     v.doubted = [c for c in reading.claims if c.doubted]
     return v
@@ -778,6 +815,8 @@ def apply(record: dict, places: dict | None = None,
                                      | v.new_amenities)
     if reading.traits:
         record["traits"] = sorted(set(record.get("traits") or []) | reading.traits)
+    if reading.nearby:
+        record["nearby"] = sorted(set(record.get("nearby") or []) | reading.nearby)
     if v.claimed_walk:
         record["walk_claimed"] = v.claimed_walk
 

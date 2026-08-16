@@ -88,6 +88,12 @@ def blank_record() -> dict:
         # alongside the amenities, because a fact's worth doesn't depend on
         # which part of the page it was written on.
         "kind": None, "traits": None,
+        # What's around it rather than in it: food_nearby, nightlife_nearby,
+        # shops_nearby, green_nearby. The neighbourhood has no coordinates and
+        # no landmark to measure to, and it is most of what makes a street worth
+        # staying on — "bars, restaurants, shops and pubs within 5 minutes' walk"
+        # is a fact about a stay that no other field could hold.
+        "nearby": None,
         # Which fields above are currently holding a value that came from the
         # prose rather than from the page's own markup. Rebuilt on every read,
         # so a field a later scrape fills properly drops off it.

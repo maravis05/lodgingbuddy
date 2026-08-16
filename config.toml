@@ -78,7 +78,7 @@ where_width = 20
 # column because there is no width at which "soundproofed, historic building,
 # private entrance" fits one, and the trait that decides a stay is exactly the
 # one a truncated column would drop.
-facts = "line"
+facts = "lines"
 # The most traits the line will name before "+3" — an upper bound, not a
 # target. What actually decides is the width of your terminal: the line is
 # fitted to it and never wraps, because a two-line row in a thirty-row table
@@ -254,6 +254,19 @@ self_check_in = 2
 # so a stay that mentions it is a stay whose bill is higher than the table says.
 visitor_levy = -3
 limited_parking = -2
+
+# What's around it rather than in it, which the write-up is the only source for
+# — no listing gives the neighbourhood coordinates, and "bars, restaurants,
+# shops and pubs within 5 minutes' walk" decides as much as the walk to a
+# named landmark does. Only claimed in the plural: a singular "restaurant" is
+# the hotel's own dining room, and a "garden" is the patch behind the building.
+food_nearby = 5
+nightlife_nearby = 3
+groceries_nearby = 3
+shops_nearby = 2
+green_nearby = 2
+culture_nearby = 2
+transport_nearby = 2
 # Others summary.py knows, unweighted here because they'd all fire at once on a
 # city flat and a bonus everything earns is a bonus nobody earns: historic_
 # building, renovated, private_entrance, private_bathroom, bathtub, sofa_bed,

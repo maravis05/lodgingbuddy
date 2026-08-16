@@ -481,7 +481,9 @@ def cmd_set(args) -> int:
     amount, cur, estimated = all_in(rec)
     print(f"Updated {rec['name']}")
     if args.summary is not None:
-        print(facts_line(rec, verdict=gleaned) or "  nothing new in the write-up")
+        for line in (facts_rows(rec, verdict=gleaned)
+                     or ["  nothing new in the write-up"]):
+            print(line)
     if amount:
         vat = rec.get("vat_rate") or config.VAT_RATE
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
@@ -592,23 +594,75 @@ def trait_words(traits: list[str], limit: int | None = None,
     return ", ".join(words)
 
 
-def beds_brief(beds: list | None) -> str:
-    """The bed list in the fewest words that still settle it.
+# Booking writes American and the trip is Scottish. "1 full" is a double and
+# "2 twin" is two singles, and the row that answers "how are we sleeping" should
+# say it the way you'd say it out loud.
+BED_WORDS = {"full": "double", "twin": "single", "sofa": "sofa bed",
+             "double": "double", "single": "single", "queen": "queen",
+             "king": "king", "bunk": "bunk"}
 
-    Aggregated across rooms rather than listed by room — "2 full, 1 sofa"
-    rather than "Bedroom 1: 1 full · Bedroom 2: 1 full · Living room: 1 sofa",
-    which is `show`'s job and four times the width. What survives the squeeze is
-    the sofa, and the sofa is the whole question: a one-bedroom flat that sleeps
-    three does it by putting somebody in the lounge, and the Space column says
-    "1br" either way.
+
+def _beds(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def sleeping_words(rec: dict) -> str:
+    """How the party actually divides up, in words rather than counts.
+
+    The one question the Space column cannot answer. "1br" is the same two
+    characters whether the third person gets a room or the sofa, and which of
+    those it is decides the stay — so what survives every squeeze below is the
+    sofa and the room it's in.
+
+    Beds behind a door first, then the ones that aren't, because that is the
+    order they get taken in. Falls back to a bedroom count where the site never
+    published a layout, which is 7 of the 30: "2 bedrooms" is less than the
+    truth but it isn't a guess at it.
     """
+    beds = rec.get("beds")
     if not beds:
-        return ""
-    totals: dict[str, int] = {}
+        rooms = rec.get("bedrooms")
+        return _beds(rooms, "bedroom") if rooms else ""
+
+    private: dict[str, int] = {}
+    shared: list[str] = []
     for bed in beds:
-        kind = bed.get("type") or "bed"
-        totals[kind] = totals.get(kind, 0) + (bed.get("count") or 1)
-    return ", ".join(f"{n} {kind}" for kind, n in totals.items())
+        word = BED_WORDS.get((bed.get("type") or "").lower(),
+                             bed.get("type") or "bed")
+        count = bed.get("count") or 1
+        # Absent means private: a flat bed list with no rooms in it is a list of
+        # bedrooms, and only a site that names rooms can tell us otherwise.
+        if bed.get("private", True):
+            private[word] = private.get(word, 0) + count
+        else:
+            where = (bed.get("room") or "").lower()
+            # "1 sofa bed in the living room" — the 1 is noise, there is one.
+            phrase = word if count == 1 else _beds(count, word)
+            shared.append(f"{phrase} in the {where}" if where else phrase)
+
+    parts = [", ".join(_beds(n, w) for w, n in private.items())] if private else []
+    return " + ".join(parts + shared)
+
+
+# What's around the place, said the way you'd say it. The slug carries "_nearby"
+# so config.toml reads unambiguously; the row it prints on is already headed
+# "nearby" and doesn't need it twice.
+NEARBY_WORDS = {
+    "food_nearby": "restaurants", "nightlife_nearby": "bars & pubs",
+    "shops_nearby": "shops", "groceries_nearby": "a supermarket",
+    "culture_nearby": "museums & cinemas", "green_nearby": "a park",
+    "transport_nearby": "public transport",
+}
+# Most worth knowing first, for when the row runs out of room.
+NEARBY_ORDER = ["food_nearby", "nightlife_nearby", "groceries_nearby",
+                "shops_nearby", "green_nearby", "culture_nearby",
+                "transport_nearby"]
+
+
+def nearby_words(rec: dict) -> str:
+    rank = {name: i for i, name in enumerate(NEARBY_ORDER)}
+    found = sorted(rec.get("nearby") or [], key=lambda n: rank.get(n, len(rank)))
+    return ", ".join(NEARBY_WORDS.get(n, n.replace("_nearby", "")) for n in found)
 
 
 def place_brief(name: str) -> str:
@@ -624,7 +678,7 @@ def place_brief(name: str) -> str:
 WORTH_NAMING = 30
 
 
-def claimed_brief(rec: dict, limit: int = 2) -> str:
+def claimed_brief(rec: dict, limit: int = 4) -> str:
     """The nearest places the listing bothered to time, in its own words."""
     claimed = rec.get("walk_claimed") or {}   # already nearest-first
     near = [(place, mins) for place, mins in claimed.items()
@@ -633,67 +687,90 @@ def claimed_brief(rec: dict, limit: int = 2) -> str:
                      for place, mins in near[:limit])
 
 
-FACTS_INDENT = "    ↳ "
 FACTS_SEP = " · "
-# Below this many traits the line has stopped being worth the row it costs, so
-# the walks give up their place rather than the traits.
-FACTS_MIN_TRAITS = 2
+# Wide enough for both labels and a space, so the two rows line up under each
+# other and the eye can run down either one without reading the other.
+FACTS_LABEL = 6
 
 
-def facts_line(rec: dict, width: int = 100, rarity: dict | None = None,
-               verdict=None) -> str:
-    """One line saying what the listing's own write-up adds to the row above it.
-
-    One line, always — it wrapped before, and a two-line row in a thirty-row
-    table costs more than the facts on the second line are worth. So the parts
-    are dropped in order of what you'd miss least: the walks the listing
-    claims, then the least distinguishing traits, and what's left says how many
-    were cut.
-
-    Nothing here says where a fact came from. Everything on this line was
-    scraped off the same page as everything in the columns above it, and
-    flagging half of it as "from the prose" ranked facts by which paragraph
-    printed them, which is not a ranking.
+def _row(label: str, body: str) -> str:
+    """One row, at whatever width it comes out. Fitting is the caller's job —
+    trimming here would make every candidate measure as fitting, and the
+    shrink-until-it-fits loop below would always accept its first, longest try.
     """
+    return f"    ↳ {label:<{FACTS_LABEL}}  {body}"
+
+
+def facts_rows(rec: dict, width: int = 100, rarity: dict | None = None,
+               verdict=None) -> list[str]:
+    """What the write-up adds to the row above, in the order you'd ask it.
+
+    Two rows, because there are two questions and they don't compete for the
+    same space: how are we sleeping, and what's around it. Cramming both onto
+    one line meant the sofa bed and the walk to Waverley bidding against each
+    other, and losing either to a microwave.
+
+      inside  the layout first, then what kind of place it is and the traits
+              that set this one apart from the others in the table
+      nearby  the landmarks the listing timed, nearest first, then the
+              neighbourhood — which has no landmark and no coordinates and is
+              still most of what makes a street worth staying on
+
+    Each row is one line, fitted to the terminal and never wrapped. What gets
+    cut is always the least distinguishing thing on it, and the tail says how
+    many went. A row with nothing to say isn't printed.
+
+    Nothing here says where a fact came from. It all came off the same page,
+    and flagging half of it would rank facts by which paragraph printed them.
+    """
+    rows = []
+
     kind = rec.get("kind") or ""
-    fixed = [x for x in (KIND_WORDS.get(kind, kind), beds_brief(rec.get("beds")))
-             if x]
-    traits = [TRAIT_WORDS.get(t, t.replace("_", " "))
-              for t in notable(rec.get("traits") or [], rarity)]
-    walks = claimed_brief(rec)
+    inside = [x for x in (sleeping_words(rec), KIND_WORDS.get(kind, kind)) if x]
     if verdict is not None and verdict.conflicts:
         # Loud, and never cut: two sources disagreeing about the same property
         # outranks anything either of them agrees on.
-        fixed.append("disagrees with the page on "
-                     + ", ".join(f"{k} ({held} vs {said})"
-                                 for k, (held, said) in verdict.conflicts.items()))
+        inside.append("disagrees with the page on "
+                      + ", ".join(f"{k} ({held} vs {said})"
+                                  for k, (held, said) in verdict.conflicts.items()))
+    said = rec.get("traits") or []
+    if "sofa" in " ".join(inside):
+        # The layout already put somebody on it, and in a named room. Saying
+        # "sofa bed" again a few words later is the same fact twice.
+        said = [t for t in said if t != "sofa_bed"]
+    traits = [TRAIT_WORDS.get(t, t.replace("_", " "))
+              for t in notable(said, rarity)]
+    if line := _fit("inside", inside, traits, width):
+        rows.append(line)
 
-    def build(count: int, tail: str) -> str:
+    # Places first: a walk of six minutes to Waverley outranks the fact that
+    # there are shops, and the categories are what gets cut when both won't fit.
+    if line := _fit("nearby", [claimed_brief(rec)],
+                    [w for w in nearby_words(rec).split(", ") if w], width):
+        rows.append(line)
+    return rows
+
+
+def _fit(label: str, fixed: list[str], elastic: list[str], width: int) -> str:
+    """One row, with as much of `elastic` on it as the terminal will take."""
+    fixed = [x for x in fixed if x]
+
+    def build(count: int) -> str:
         parts = list(fixed)
-        if count:
-            words = traits[:count]
-            if len(traits) > count:
-                words.append(f"+{len(traits) - count}")
+        if elastic:
+            words = elastic[:count]
+            if len(elastic) > count:
+                words.append(f"+{len(elastic) - count}")
             parts.append(", ".join(words))
-        elif traits:
-            parts.append(f"+{len(traits)}")
-        if tail:
-            parts.append(tail)
-        return FACTS_INDENT + FACTS_SEP.join(parts) if parts else ""
+        return _row(label, FACTS_SEP.join(parts)) if parts else ""
 
-    def longest(tail: str) -> tuple[int, str]:
-        for count in range(min(config.FACTS_TRAITS, len(traits)), -1, -1):
-            line = build(count, tail)
-            if len(line) <= width:
-                return count, line
-        return -1, ""
-
-    if walks:
-        count, line = longest(walks)
-        if count >= min(FACTS_MIN_TRAITS, len(traits)):
+    for count in range(min(config.FACTS_TRAITS, len(elastic)), -1, -1):
+        line = build(count)
+        if len(line) <= width:
             return line
-    _, line = longest("")
-    return line or build(0, "")[:width]
+    # Nothing fits, which takes a name longer than the terminal is wide. Cut it
+    # rather than wrap it — this row's whole job is being one line.
+    return build(0)[:width]
 
 
 # Each column as (header, how to render one row). Which of them `list` prints,
@@ -832,11 +909,16 @@ def cmd_list(args) -> int:
     # can use whatever room is going. Never past it: a line that wraps turns
     # every stay into two rows and the table stops being scannable, which is
     # the only thing it was for.
-    facts = config.FACTS_LINE and not getattr(args, "no_facts", False)
+    facts = config.FACTS if not getattr(args, "no_facts", False) else "off"
     width = max(shutil.get_terminal_size((table_width, 24)).columns, 60)
     for rec, row in zip(stays, rows):
         print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
-        if facts and (line := facts_line(rec, width, rarity)):
+        if facts == "off":
+            continue
+        # "line" is the first row only — what the place is. "lines" adds what
+        # is around it, which is the other half of the question and worth the
+        # extra row to anyone who cares where they're standing.
+        for line in facts_rows(rec, width, rarity)[:1 if facts == "line" else 2]:
             print(line)
 
     footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
@@ -1008,7 +1090,9 @@ def cmd_glean(args) -> int:
         doubted += [(rec, c) for c in verdict.doubted]
         if verdict.anything():
             read += 1
-            print(f"  {rec.get('name') or '?'}\n{facts_line(rec, width, rarity, verdict)}")
+            print(f"  {rec.get('name') or '?'}")
+            for line in facts_rows(rec, width, rarity, verdict):
+                print(line)
     save(stays)
 
     print(f"\nRead {read} write-up{'s' if read != 1 else ''}.", end="")
