@@ -109,14 +109,28 @@ DEFAULTS = {
         "where_width": 20,
         "columns": ["name", "source", "space", "slp", "walk", "all_in",
                     "share_nt", "score", "points", "value"],
-        # What the write-up said, under each row. "line" is a second indented
-        # line per stay; "off" is columns only. There are `kind` and `traits`
-        # columns too, for a table you'd rather keep one row per stay.
+        # What the write-up said, under each row. "line" is what the place is;
+        # "lines" adds what is around it; "off" is columns only. There are
+        # `kind` and `traits` columns too, for a table you'd rather keep one
+        # row per stay.
         "facts": "lines",
         # An upper bound on the traits that line will name, not a target — the
         # width of the terminal is what actually decides, since the line is
         # fitted to it and never wraps.
         "facts_traits": 8,
+        # The most lines of write-up one stay gets in `list`, across both
+        # blocks. 0 lets a stay have as many as it has something to say for.
+        "facts_lines": 0,
+        # How wide the title column is. 0 fits it to the terminal: the numbers
+        # take what they need and the title gets the rest.
+        "title_width": 0,
+        # A rule between stays, every N of them. 0 draws none.
+        "rule_every": 1,
+        # A bar beside Value, scaled to the best in the table.
+        "value_bars": True,
+        # auto | always | never. "auto" is on at a terminal and off down a
+        # pipe, so a redirected table is the same characters it always was.
+        "colour": "auto",
         # How many links `list` prints under the table, from the top of
         # whatever order it just sorted into. 0 prints none.
         "links": 3,
@@ -479,6 +493,11 @@ def _bind() -> None:
         COLUMNS=CONFIG["display"]["columns"],
         FACTS=CONFIG["display"]["facts"],
         FACTS_TRAITS=CONFIG["display"]["facts_traits"],
+        FACTS_LINES=CONFIG["display"]["facts_lines"],
+        TITLE_WIDTH=CONFIG["display"]["title_width"],
+        RULE_EVERY=CONFIG["display"]["rule_every"],
+        VALUE_BARS=CONFIG["display"]["value_bars"],
+        COLOUR=CONFIG["display"]["colour"],
         LINKS=CONFIG["display"]["links"],
         STATUS_MARKS=CONFIG["display"]["status_marks"],
         TAX_MARKS=CONFIG["display"]["tax_marks"],

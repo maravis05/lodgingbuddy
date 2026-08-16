@@ -34,6 +34,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -57,6 +58,29 @@ import summary
 # From __file__ rather than sys.argv[0], which is "-c" under `python -c` and a
 # module path when something imports us — neither of which anyone can type.
 RUN = ("python " if os.name == "nt" else "python3 ") + os.path.basename(__file__)
+
+
+# Colour, and only where there's someone to see it. Down a pipe or into a file
+# the table is the same characters it always was, so `list > shortlist.txt` and
+# `list | grep Leith` still read — what the colour carries is emphasis, and
+# nothing is only said by it. NO_COLOR is honoured because it's the convention,
+# and `[display] colour` overrides both ways for the terminal that lies.
+def _painted() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if config.COLOUR == "always":
+        return True
+    return config.COLOUR != "never" and sys.stdout.isatty()
+
+
+def paint(code: str):
+    """A style, applied only when styling is on at the moment of printing."""
+    return lambda text: f"\033[{code}m{text}\033[0m" if _painted() else text
+
+
+# Dim for what's secondary — the write-up, the units, the rules. Bold for the
+# header. Lead for the few rows at the top, which is what you came to find.
+DIM, BOLD, LEAD = paint("2"), paint("1"), paint("32")
 
 
 # ──────────────────────────────── storage ──────────────────────────────────
@@ -517,7 +541,9 @@ SORTS = {
 
 
 def _pct(value: float | None) -> str:
-    return f"{value:.0f}%" if value is not None else "—"
+    # Bare, because the "%" is in the unit row under the header. Thirty of them
+    # down a column is thirty characters saying the same thing.
+    return f"{value:.0f}" if value is not None else "—"
 
 
 # Traits read better as English than as slugs, and a few of them read badly
@@ -672,6 +698,94 @@ def place_brief(name: str) -> str:
         name, name.removeprefix("Edinburgh "))
 
 
+# The words a listing title is made of besides the name of the place. Sellers
+# write to a formula — an adjective, the size, the kind of building, the town —
+# and the table has a column for every one of those. What's left is the half
+# you can't read anywhere else, which is the half worth the width.
+#
+# Named here for the same reason TRAIT_WORDS is: the general rule below finds
+# most of them by counting, but counting alone puts "Fabulous" above "Roseburn"
+# in a table where only one stay is fabulous.
+TITLE_FILLER = set(
+    "a an and the of in on at to by with for from near close nearby amp".split())
+TITLE_GENERIC = set("""
+beautiful lovely stunning gorgeous charming cosy cozy comfy comfortable comfort
+spacious bright airy sunny peaceful quiet stylish chic elegant modern contemporary
+new newly built renovated luxury luxurious deluxe premium executive perfect ideal
+fabulous fantastic amazing wonderful great superb excellent pleasant delightful
+apartment apartments apt flat flats studio home house residence property place
+accommodation stay retreat getaway escape rooms room suite lodge
+bed beds bedroom bedrooms br one two three four five 1 2 3 4 5 1br 2br 3br 4br
+min mins minute minutes walk
+""".split())
+# How many titles have to share a word before it stops telling any of them
+# apart. Same argument as how_rare, counted over the same table.
+TITLE_COMMON = 3
+
+
+def _bare(word: str) -> str:
+    return re.sub(r"[^a-z0-9']", "", word.lower())
+
+
+def title_rarity(stays: list[dict]) -> dict[str, int]:
+    """How many of these stays use each word in their name."""
+    counts: dict[str, int] = {}
+    for rec in stays:
+        for word in {_bare(w) for w in (rec.get("name") or "").split()}:
+            if word:
+                counts[word] = counts.get(word, 0) + 1
+    return counts
+
+
+def squeeze(name: str, rarity: dict[str, int], width: int, city: str = "") -> str:
+    """A title with the words the rest of the table already said taken off.
+
+    Booking.com titles are sixty characters of "Bright And Stylish Two Bedroom
+    Apartment Near Granton Waterfront", and a column that truncates one lands
+    on "Bright And Stylish Two Bedroo" — which names nothing, in a column whose
+    only job is naming. Three things say a word isn't working: it's grammar,
+    another column already says it, or every other title uses it too.
+
+    Two of those are worth nothing at any width, so they go before the width is
+    even consulted: a word the title has already used ("Peaceful 3 Bedroom
+    Townhouse Edinburgh Edinburgh") and the name of the city every row is in.
+    The rest go only when the column actually runs out, commonest first — the
+    title is squeezed as far as it must be and no further.
+    """
+    town = {_bare(w) for w in city.split()}
+    seen: set[str] = set()
+    kept: list[list] = []
+    for word in name.split():
+        low = _bare(word)
+        if not low or low in seen:
+            continue
+        seen.add(low)
+        # A rank, not a verdict: filler first, then what a column already says,
+        # then whatever the other titles are also using, commonest first.
+        tier = (0 if low in TITLE_FILLER else
+                1 if low in TITLE_GENERIC else 2)
+        kept.append([word, tier, rarity.get(low, 0), low in town])
+    # Never down to nothing: a stay actually called "Edinburgh" keeps the word.
+    if any(not is_town for *_, is_town in kept):
+        kept = [k for k in kept if not k[-1]]
+
+    def out() -> str:
+        return " ".join(word for word, *_ in kept).strip()
+
+    while len(out()) > width and len(kept) > 1:
+        worst = min(range(len(kept)),
+                    key=lambda i: (kept[i][1], -kept[i][2], -i))
+        if kept[worst][1] == 2 and kept[worst][2] < TITLE_COMMON:
+            break          # nothing left but the words actually naming it
+        kept.pop(worst)
+    # What's left can still open with an orphaned "In" or "By", the noun it
+    # was pointing at having gone.
+    while len(kept) > 1 and kept[0][1] == 0:
+        kept.pop(0)
+    text = out() or (name.strip() or "?")
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
 # How far a claimed walk can be and still be worth naming on one line. The
 # record keeps everything up to an hour, because a 50-minute walk is a fact
 # about a stay two miles out; a line with room for two is a line that should
@@ -774,41 +888,180 @@ def _fit(label: str, fixed: list[str], elastic: list[str], width: int) -> str:
     return build(0)[:width]
 
 
-# Each column as (header, how to render one row). Which of them `list` prints,
-# and in what order, is `columns` in config.toml — the table got wide enough
-# that "all of them" stopped being a sensible default for every trip.
+# The separator, glued to the word in front of it so a wrap can never open a
+# line with one. "· free parking, work desk" at a left margin reads as a bullet
+# in a list that isn't there. textwrap won't break on a non-breaking space, so
+# the dot can only ever end a line; it goes back to an ordinary space after.
+GLUE = "\u00a0" + FACTS_SEP.strip() + " "
+# How far a continuation is indented under the line it continues. What tells
+# one block from the next now that neither is labelled: flush with the margin
+# starts something new, indented is the last one carrying on.
+HANG = "  "
+
+
+def prose(rec: dict, width: int, rarity: dict | None = None,
+          cap: int = 4, halves: int = 2) -> list[str]:
+    """What the write-up adds, wrapped into the title's column and no wider.
+
+    This used to be one line fitted to the whole terminal, which put prose
+    underneath the numbers on the rows that had any and not on the rows that
+    didn't — so the numeric block had a left edge that moved as you read down
+    it, and the eye had nothing straight to follow. Kept inside the column it
+    belongs to, the numbers get a clean pane, and the prose gets as many lines
+    as it has something to say for. Which is the better half of the trade: this
+    is the only place a trait can be read in full rather than cut to "+6".
+
+    Unlabelled. "inside" and "nearby" cost eight characters off the front of
+    every line — a fifth of the column — to say what the order already says and
+    what the words give away anyway: a list of beds is not a list of landmarks.
+    A hanging indent marks where one block ends, which is what prose has always
+    used for this, and it costs two characters instead of eight.
+
+    What gets cut is still the least distinguishing thing on the row, and the
+    tail still says how many went — but it counts facts now rather than lines,
+    so "+2" is two traits and never two-thirds of a landmark's name.
+    """
+    blocks: list[tuple[str, list[str]]] = []
+
+    kind = rec.get("kind") or ""
+    head = [x for x in (sleeping_words(rec), KIND_WORDS.get(kind, kind)) if x]
+    said = rec.get("traits") or []
+    if "sofa" in " ".join(head):
+        # The layout already put somebody on it, and in a named room.
+        said = [t for t in said if t != "sofa_bed"]
+    traits = [TRAIT_WORDS.get(t, t.replace("_", " "))
+              for t in notable(said, rarity)]
+    if head or traits:
+        blocks.append((GLUE.join(head), traits))
+
+    # Places first: a walk of six minutes to Waverley outranks the fact that
+    # there are shops, and the categories are what gets cut when both won't fit.
+    where = claimed_brief(rec)
+    around = [w for w in nearby_words(rec).split(", ") if w]
+    if where or around:
+        blocks.append((where, around))
+    # `facts = "line"` wants the first half, not the first line of it — cutting
+    # by line ends the row on a dangling comma partway through a trait list.
+    blocks = blocks[:max(halves, 0)]
+    if not blocks:
+        return []
+
+    def lay(fixed: str, elastic: list[str], count: int) -> list[str]:
+        shown = elastic[:count]
+        if count < len(elastic):
+            shown = shown + [f"+{len(elastic) - count}"]
+        parts = [p for p in (fixed, ", ".join(shown)) if p]
+        lines = textwrap.wrap(GLUE.join(parts), width,
+                              subsequent_indent=HANG) or [""]
+        return [line.replace("\u00a0", " ") for line in lines]
+
+    # Rationed before either block is fitted, and every block that has anything
+    # to say keeps a line before any block gets a second one. Spending the whole
+    # ration in order dropped `nearby` off some stays without saying so, which
+    # is the one failure a fitted line must not have.
+    if cap <= 0:
+        quota = [len(lay(f, e, len(e))) for f, e in blocks]
+    else:
+        quota = [1] * len(blocks)
+        left = cap - len(blocks)
+        for i, (fixed, elastic) in enumerate(blocks):
+            take = max(min(len(lay(fixed, elastic, len(elastic))) - quota[i],
+                           left), 0)
+            quota[i] += take
+            left -= take
+
+    rows: list[str] = []
+    for (fixed, elastic), room in zip(blocks, quota):
+        if room <= 0:
+            continue
+        # Shrink until it fits, exactly as the single line used to.
+        for count in range(len(elastic), -1, -1):
+            lines = lay(fixed, elastic, count)
+            if len(lines) <= room:
+                break
+        rows.extend(lines[:room])
+    return rows
+
+
+# The table is two panes. On the left, one column: the rank, the title, and the
+# write-up wrapped underneath it. On the right, the numbers, sealed behind a
+# seam that runs unbroken down every line of the table — including the prose
+# lines, which is the whole point. Prose used to be fitted to the terminal and
+# so ran underneath the figures on the stays that had any, giving the numeric
+# block a left edge that moved as you read down it.
+VERT, CROSS, CLOSE = "│", "┼", "┴"
+SEAM = "  " + VERT + "  "
+# Narrow enough to still name a place, wide enough to wrap prose into. Between
+# these the title column is whatever the terminal has spare.
+MIN_TITLE, MAX_TITLE = 28, 56
+# The value bar, and how many rows off the top are worth colouring. The bar
+# says nothing a column doesn't — it says it in a shape you can read without
+# reading, which is what the top of a sorted table is for.
+BAR, LEADERS = 8, 3
+
+
+def _header(col: str) -> str:
+    # The per-share column is the one you compare on, so it says whose money it
+    # is — a bare "P/p/nt" invited the assumption that it was split three ways.
+    return COLUMNS[col][0] or config.SHARE_LABEL.title()
+
+
+def _commonest(values) -> str | None:
+    """Whichever of these there is most of, or None if there are none."""
+    tally: dict[str, int] = {}
+    for value in values:
+        tally[value] = tally.get(value, 0) + 1
+    return max(tally, key=tally.get) if tally else None
+
+
+# Each column as (header, unit, how to render one row, which way it aligns).
+# The unit is a second header line rather than a suffix on every figure: thirty
+# rows of "GBP" is thirty rows of the same word, and it is what stopped the
+# numbers lining up on anything. Numbers align right so the eye can compare
+# magnitudes down the column without reading them; words align left.
+#
+# Which of these `list` prints, and in what order, is `columns` in config.toml —
+# the table got wide enough that "all of them" stopped being a sensible default
+# for every trip.
 COLUMNS = {
-    "name":     ("Property", lambda r, ctx: (r.get("name") or "?")[:config.NAME_WIDTH]),
-    "source":   ("Source", lambda r, ctx: (r.get("source") or "")[:config.SOURCE_WIDTH]),
-    "where":    ("Where", lambda r, ctx: (r.get("location") or r.get("region") or "")[:config.WHERE_WIDTH]),
-    "checkin":  ("Check-in", lambda r, ctx: f"{r['checkin']} {weekday(r['checkin'])}" if r.get("checkin") else ""),
-    "nts":      ("Nts", lambda r, ctx: str(r.get("nights") or "")),
-    "slp":      ("Slp", lambda r, ctx: str(r.get("sleeps") or r.get("adults") or "")),
-    "space":    ("Space", lambda r, ctx: " ".join(
+    "name":     ("Property", "", lambda r, ctx: r.get("name") or "?", "<", "what"),
+    # ^ kept so an unedited `columns` list still parses; it heads the left pane
+    #   rather than being one of these, and cmd_list takes it out.
+    "source":   ("Source", "", lambda r, ctx: (r.get("source") or "")[:config.SOURCE_WIDTH], "<", "what"),
+    "where":    ("Where", "", lambda r, ctx: (r.get("location") or r.get("region") or "")[:config.WHERE_WIDTH], "<", "what"),
+    "checkin":  ("Check-in", "", lambda r, ctx: f"{r['checkin']} {weekday(r['checkin'])}" if r.get("checkin") else "", "<", "what"),
+    "nts":      ("Nts", "", lambda r, ctx: str(r.get("nights") or ""), ">", "what"),
+    "slp":      ("Slp", "", lambda r, ctx: str(r.get("sleeps") or r.get("adults") or ""), ">", "what"),
+    "space":    ("Space", "", lambda r, ctx: " ".join(
                     x for x in (f"{r['bedrooms']}br" if r.get("bedrooms") else
                                 (f"{r['rooms']}rm" if r.get("rooms") else None),
-                                f"{r['bathrooms']:g}ba" if r.get("bathrooms") else None) if x)),
-    "all_in":   ("All-in", lambda r, ctx: ctx["money"](r)),
-    "share_nt": (None, lambda r, ctx: (f"{per_share_night(r, ctx['rate']):,.0f}"
-                                       if per_share_night(r, ctx["rate"]) else "—")),
+                                f"{r['bathrooms']:g}ba" if r.get("bathrooms") else None) if x), "<", "what"),
+    # The currency rides in the unit row rather than on thirty rows of figures,
+    # so the column holds numbers you can compare down. Only a row in some other
+    # currency says which — being the one that needs to.
+    "all_in":   ("All-in", lambda ctx: ctx["unit_cur"], lambda r, ctx: ctx["money"](r), ">", "cost"),
+    "share_nt": (None, "/nt", lambda r, ctx: (f"{per_share_night(r, ctx['rate']):,.0f}"
+                                              if per_share_night(r, ctx["rate"]) else "—"), ">", "cost"),
     # Normalised, so one column can hold a 5-star site and a 10-point one.
-    "score":    ("Guest", lambda r, ctx: _pct(scoring.guest_score(r))),
-    "reviews":  ("Revs", lambda r, ctx: str(r.get("reviews") or "—")),
-    "clean":    ("Clean", lambda r, ctx: _pct(scoring.cleanliness(r))),
-    "look":     ("Look", lambda r, ctx: _pct(scoring.look(r))),
+    "score":    ("Guest", "%", lambda r, ctx: _pct(scoring.guest_score(r)), ">", "good"),
+    "reviews":  ("Revs", "", lambda r, ctx: str(r.get("reviews") or "—"), ">", "good"),
+    "clean":    ("Clean", "%", lambda r, ctx: _pct(scoring.cleanliness(r)), ">", "good"),
+    "look":     ("Look", "%", lambda r, ctx: _pct(scoring.look(r)), ">", "good"),
     # "≈" says the figure is the listing's own claim rather than a routed one.
     # Same column because it answers the same question, marked because it was
     # answered by the seller.
-    "walk":     ("Walk", lambda r, ctx: (f"{scoring.walked(r)[1] and '≈' or ''}"
-                                         f"{scoring.walk_minutes(r):.0f}m"
-                                         if scoring.walk_minutes(r) is not None else "—")),
-    "kind":     ("Kind", lambda r, ctx: r.get("kind") or "—"),
-    "traits":   ("From the write-up", lambda r, ctx: trait_words(
+    "walk":     ("Walk", "min", lambda r, ctx: (f"{scoring.walked(r)[1] and '≈' or ''}"
+                                                f"{scoring.walk_minutes(r):.0f}"
+                                                if scoring.walk_minutes(r) is not None else "—"), ">", "what"),
+    "kind":     ("Kind", "", lambda r, ctx: r.get("kind") or "—", "<", "what"),
+    "traits":   ("From the write-up", "", lambda r, ctx: trait_words(
                     r.get("traits") or [], config.FACTS_TRAITS,
-                    ctx.get("rarity")) or "—"),
-    "points":   ("Pts", lambda r, ctx: f"{ctx['score'](r).points:g}"),
-    "value":    ("Value", lambda r, ctx: (f"{ctx['score'](r).value:g}"
-                                          if ctx["score"](r).value is not None else "—")),
+                    ctx.get("rarity")) or "—", "<", "good"),
+    "points":   ("Pts", "", lambda r, ctx: f"{ctx['score'](r).points:g}", ">", "good"),
+    # One decimal on every row, so the column is a straight edge rather than a
+    # ragged one — "23" beside "20.9" beside "18.5" doesn't line up on anything.
+    "value":    ("Value", "", lambda r, ctx: (f"{ctx['score'](r).value:.1f}"
+                                              if ctx["score"](r).value is not None else "—"), ">", "good"),
 }
 
 
@@ -868,61 +1121,145 @@ def cmd_list(args) -> int:
     seen_cur = {cur for r in stays
                 for amount, cur, _ in [all_in(r)] if amount and cur}
 
+    # The currency and the tax basis the header can carry are whichever most of
+    # the table is in. A mark every row wears distinguishes no row from any
+    # other — it is thirty characters spent saying "as usual" — so the common
+    # case is stated once underneath and only the exceptions are marked.
+    common_cur = _commonest(cur for r in stays
+                            for amount, cur, _ in [all_in(r)] if amount and cur)
+    common_tax = _commonest(tax for r in stays
+                            for amount, _, tax in [all_in(r)] if amount)
+    shown_cur = converted(1, common_cur, rate)[1] if common_cur else ""
+
     def money(rec: dict) -> str:
         amount, cur, tax = all_in(rec)
         amount, cur = converted(amount, cur, rate)
         if not amount:
             return "—"
-        return (from_mark(rec, tax)
-                + f"{amount:,.0f} {cur}".strip() + config.TAX_MARKS.get(tax, ""))
+        unit = "" if cur == shown_cur else f" {cur}"
+        mark = "" if tax == common_tax else config.TAX_MARKS.get(tax, "")
+        return from_mark(rec, tax) + f"{amount:,.0f}{unit}".strip() + mark
 
     # Worked out over the stays being shown, so `--viable` and a filtered
     # shortlist re-rank what counts as worth mentioning — in the column and in
-    # the line under it, which have to agree.
+    # the prose under it, which have to agree.
     rarity = how_rare(stays)
+    titles = title_rarity(stays)
     ctx = {"rate": rate, "money": money, "rarity": rarity,
-           "score": lambda r: marks[key_of(r)]}
+           "unit_cur": shown_cur, "score": lambda r: marks[key_of(r)]}
 
-    chosen = [c for c in config.COLUMNS if c in COLUMNS]
+    # `name` is not a column any more — it heads the left pane, with the prose
+    # wrapped underneath it — so it is taken out of the list rather than
+    # rejected, and an unedited config.toml still means what it meant.
+    chosen = [c for c in config.COLUMNS if c in COLUMNS and c != "name"]
     if unknown := [c for c in config.COLUMNS if c not in COLUMNS]:
         print(f"{config.PATH}: no such column {', '.join(unknown)} — "
               f"have: {', '.join(COLUMNS)}", file=sys.stderr)
 
-    rows = [[leading_mark(rec, gates[key_of(rec)])]
-            + [COLUMNS[c][1](rec, ctx) for c in chosen] for rec in stays]
-    # The per-share column is the one you compare on, so it says whose money it
-    # is — a bare "P/p/nt" invited the assumption that it was split three ways.
-    headers = [""] + [COLUMNS[c][0] or f"{config.SHARE_LABEL.title()}/nt"
-                      for c in chosen]
+    # A column holding one value thirty times isn't a column, it's a caption in
+    # the wrong place — and this one sat between the name and the numbers,
+    # pushing everything right for no information at all. Said once underneath
+    # instead. Only worth doing where there are enough rows for "every row" to
+    # mean something, and never to the two columns you came to read.
+    fixed: list[tuple[str, str]] = []
+    if len(stays) >= 3:
+        for col in list(chosen):
+            if col in ("points", "value"):
+                continue
+            seen = {COLUMNS[col][2](rec, ctx) for rec in stays}
+            if len(seen) == 1 and (only := seen.pop()).strip() not in ("", "—"):
+                fixed.append((_header(col), only))
+                chosen.remove(col)
 
-    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
-    sep = config.COLUMN_GAP
-    table_width = sum(widths) + len(sep) * (len(widths) - 1)
-    print(sep.join(h.ljust(w) for h, w in zip(headers, widths)))
-    print(config.RULE_CHAR * table_width)
+    data = [[COLUMNS[c][2](rec, ctx) for c in chosen] for rec in stays]
+    heads = [_header(c) for c in chosen]
+    units = [u(ctx) if callable(u := COLUMNS[c][1]) else u for c in chosen]
+    widths = [max(len(heads[i]), len(units[i]), *(len(row[i]) for row in data))
+              for i in range(len(chosen))]
+    align = [COLUMNS[c][3] for c in chosen]
+    # Four questions, not ten columns: what the place is, what it costs, how
+    # good it is. A rule where the question changes gives the eye somewhere to
+    # stop, and costs one character each.
+    groups = [COLUMNS[c][4] for c in chosen]
 
-    # The facts line goes under its row rather than beside it because there is
-    # no width at which "soundproofed, historic building, private entrance"
-    # fits a column, and truncating it to one would throw away the trait that
-    # decided the stay. Off with `--no-facts`, or `facts = "off"` for good.
-    #
-    # Fitted to the terminal rather than to the table, because it is prose and
-    # can use whatever room is going. Never past it: a line that wraps turns
-    # every stay into two rows and the table stops being scannable, which is
-    # the only thing it was for.
+    def pane(cells: list[str]) -> str:
+        out: list[str] = []
+        for i, (cell, w, a) in enumerate(zip(cells, widths, align)):
+            if i and groups[i] != groups[i - 1]:
+                out.append(VERT)
+            out.append(cell.rjust(w) if a == ">" else cell.ljust(w))
+        return config.COLUMN_GAP.join(out)
+
+    marked = {key_of(r): leading_mark(r, gates[key_of(r)]) for r in stays}
+    mark_w = 1 if any(m.strip() for m in marked.values()) else 0
+    rank_w = len(str(len(stays)))
+    # "12 " before the title, or "12 ✗ " where anything in the table is marked.
+    lead_w = rank_w + 1 + (mark_w + 1 if mark_w else 0)
+
+    # The numbers are as wide as the numbers are; the title column gets what's
+    # left. So widening the window widens the only column that can use it,
+    # rather than leaving a number in config.toml to guess at.
+    pane_w = len(pane(heads))       # exact: the separators are in it too
+    bars = config.VALUE_BARS and "value" in chosen
+    room = max(shutil.get_terminal_size((120, 24)).columns, 60)
+    title_w = config.TITLE_WIDTH
+    if not title_w:
+        title_w = room - lead_w - len(SEAM) - pane_w - (BAR + 2 if bars else 0)
+        # The bar is the one thing here that says nothing a column doesn't, so
+        # on a narrow terminal it is what gets spent to keep the title legible.
+        if title_w < MIN_TITLE and bars:
+            bars, title_w = False, room - lead_w - len(SEAM) - pane_w
+        title_w = max(MIN_TITLE, min(title_w, MAX_TITLE))
+
+    head = " " * lead_w + "Property".ljust(title_w) + SEAM + pane(heads)
+    unit = " " * (lead_w + title_w) + SEAM + pane(units)
+    full = len(head) + (BAR + 2 if bars else 0)
+    # Where the verticals are, so a horizontal can cross them rather than run
+    # over them. Read off the printed header rather than recomputed from the
+    # widths, which is the version that can drift from what actually got drawn.
+    seams = {i for i, ch in enumerate(head) if ch == VERT}
+
+    def rule(cross: str = CROSS) -> str:
+        return DIM("".join(cross if i in seams else config.RULE_CHAR
+                           for i in range(full)))
+
+    print(BOLD(head.rstrip()))
+    if any(units):
+        print(DIM(unit.rstrip()))
+    print(rule())
+
     facts = config.FACTS if not getattr(args, "no_facts", False) else "off"
-    width = max(shutil.get_terminal_size((table_width, 24)).columns, 60)
-    for rec, row in zip(stays, rows):
-        print(sep.join(c.ljust(w) for c, w in zip(row, widths)))
-        if facts == "off":
-            continue
-        # "line" is the first row only — what the place is. "lines" adds what
-        # is around it, which is the other half of the question and worth the
-        # extra row to anyone who cares where they're standing.
-        for line in facts_rows(rec, width, rarity)[:1 if facts == "line" else 2]:
-            print(line)
+    cap = config.FACTS_LINES        # 0 is "as many as it has something for"
+    best = max((marks[key_of(r)].value or 0) for r in stays)
+    for place, rec in enumerate(stays, 1):
+        title = squeeze(rec.get("name") or "?", titles, title_w, config.CITY or "")
+        lead = f"{str(place).rjust(rank_w)} "
+        if mark_w:
+            lead += marked[key_of(rec)][:1] + " "
+        line = lead + title.ljust(title_w) + SEAM + pane(data[place - 1])
+        if bars:
+            filled = round(BAR * (marks[key_of(rec)].value or 0) / best) if best else 0
+            bar = "█" * filled + DIM("·" * (BAR - filled))
+            line += "  " + (LEAD(bar) if place <= LEADERS else bar)
+        print(line)
+        if facts != "off":
+            # "line" is what the place is; "lines" adds what's around it, which
+            # is the other half of the question and worth the room to anyone
+            # who cares where they're standing.
+            for text in prose(rec, title_w, rarity, cap,
+                              1 if facts == "line" else 2):
+                # The seam carries on down over an empty pane, and stops there:
+                # it is the left edge of the numbers, not a box around nothing.
+                print(DIM(" " * lead_w + text.ljust(title_w) + SEAM.rstrip()))
+        if config.RULE_EVERY and place % config.RULE_EVERY == 0 \
+                and place != len(stays):
+            print(rule())
+    print(rule(CLOSE))
 
-    footnotes(stays, marks, gates, seen_tax, seen_cur, rate)
+    if fixed:
+        print("\n" + DIM("The same on every row, so not in the table: "
+                         + ", ".join(f"{h.lower()} {v}" for h, v in fixed) + "."))
+    footnotes(stays, marks, gates, seen_tax, seen_cur, rate, common_tax)
     asked = getattr(args, "links", None)
     links(stays, args.sort, config.LINKS if asked is None else asked)
     return 0
@@ -961,12 +1298,26 @@ def links(stays: list[dict], sort: str, count: int) -> None:
         print(f"  {RUN} url <id>   for any of the rest")
 
 
-def footnotes(stays, marks, gates, seen_tax, seen_cur, rate) -> None:
+TAX_NOTES = {
+    "added": lambda: (f"VAT added by us at {config.VAT_RATE:.0%} — the site "
+                      f"quoted a pre-tax price."),
+    "computed": lambda: ("the page stated its tax rates and fees, so that is "
+                         "the arithmetic done rather than a flat VAT estimate. "
+                         "`show <id>` names the rates."),
+    "unknown": lambda: ("tax status unknown; shown as quoted. Mark it with "
+                        "`set <id> --incl-tax` or `--excl-tax`."),
+}
+
+
+def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
+              common_tax=None) -> None:
     """What the table couldn't say in a column.
 
     Every mark in it gets explained here, and every explanation names the
     command that clears it — a glyph you have to go and look up is worse than
-    no glyph.
+    no glyph. The basis most of the table shares wears no glyph and is said
+    here as a plain sentence, since a mark that is on every row is one you
+    stop seeing by the third row.
     """
     # First, and without a glyph, because it isn't a footnote to one number —
     # it says the ordering of the whole table is arithmetic across two units.
@@ -985,16 +1336,15 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate) -> None:
     if any(from_mark(r, all_in(r)[2]) for r in stays):
         print("\n~  a \"from\" price, not a quote for these dates — click through "
               "and set the real total with `set <id> --price`.")
-    if "added" in seen_tax:
-        print(f"\n{config.TAX_MARKS.get('added', '')}  VAT added by us at "
-              f"{config.VAT_RATE:.0%} — the site quoted a pre-tax price.")
-    if "computed" in seen_tax:
-        print(f"{config.TAX_MARKS.get('computed', '')}  the page stated its tax "
-              "rates and fees, so that is the arithmetic done rather than a flat "
-              "VAT estimate. `show <id>` names the rates.")
-    if "unknown" in seen_tax:
-        print(f"{config.TAX_MARKS.get('unknown', '')}  tax status unknown; shown "
-              "as quoted. Mark it with `set <id> --incl-tax` or `--excl-tax`.")
+    for basis, note in TAX_NOTES.items():
+        if basis not in seen_tax:
+            continue
+        if basis == common_tax:
+            # No glyph, because no row is wearing one: this is what the column
+            # means unless a row says otherwise.
+            print("\n" + textwrap.fill(f"Throughout: {note()}", width=76))
+        else:
+            print(f"\n{config.TAX_MARKS.get(basis, '')}  {note()}")
     if any(scoring.walked(r)[1] for r in stays):
         print("\n" + textwrap.fill(
             "≈  a walk the listing claims, not one we measured — the router had "

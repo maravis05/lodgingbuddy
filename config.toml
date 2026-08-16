@@ -78,32 +78,77 @@ label = "share"
 # question you opened the table to ask — cheapest is a different one, and
 # `list --sort share` is still there for it.
 default_sort = "value"
-# Which columns `list` prints, and in what order. Pick from: name, source,
-# where, checkin, nts, slp, space, all_in, share_nt, score, reviews, clean,
-# look, walk, kind, traits, points, value. All of them at once is wider than a
+# Which columns `list` prints, and in what order. Pick from: source, where,
+# checkin, nts, slp, space, all_in, share_nt, score, reviews, clean, look,
+# walk, kind, traits, points, value. All of them at once is wider than a
 # terminal, and which ones earn their place changes with the trip — `where` and
 # `checkin` say nothing when every stay is the same town on the same dates.
+#
+# `name` is listed here for old configs and is not one of them: the title heads
+# the left-hand pane, with the write-up wrapped underneath it, and the columns
+# are what sits to the right of the seam. Naming it changes nothing either way.
+#
+# A column every stay answers identically isn't printed at all — it is said in
+# one line under the table instead. Thirty rows of "booking.com" is a caption
+# in the wrong place, and it was sitting between the name and the numbers.
 columns = ["name", "source", "space", "slp", "walk", "all_in", "share_nt",
            "score", "points", "value"]
-# Between columns, and the rule under the header.
+# Between columns, and the character the rules are drawn with.
 column_gap = "  "
 rule_char = "─"
 # Columns truncate rather than wrap, so the table stays one row per stay.
+# `name_width` is unused now that the title sizes itself — see `title_width`.
 name_width = 30
 source_width = 11
 where_width = 20
+
+# How wide the title column is, which is also how wide the write-up under it
+# wraps. 0 fits it to the terminal: the numbers take what they need and the
+# title gets everything left over, so widening the window widens the only
+# column that can use it. Held between 28 and 56 either way — narrower can't
+# name a place, wider is a paragraph. On a terminal too narrow for both, the
+# value bar is dropped before the title is.
+title_width = 0
+
+# A rule between stays, every N of them. 1 gives each stay its own block, which
+# is what makes the unlabelled write-up readable; 5 groups them; 0 draws none.
+# The rules cross the column seams rather than running over them.
+rule_every = 1
+
+# A bar beside Value, scaled to the best in the table. It says nothing the
+# number doesn't — it says it in a shape you can read without reading, which is
+# what the top of a sorted table is for.
+value_bars = true
+
+# auto | always | never. "auto" is on at a terminal and off down a pipe, so
+# `list > shortlist.txt` and `list | grep Leith` are the same characters they
+# always were. Nothing is said only by colour: it dims the write-up and the
+# units, and picks out the header and the first three rows. NO_COLOR in the
+# environment turns it off whatever this says.
+colour = "auto"
 
 # What the listing's own write-up said, under each row: what kind of place it
 # is, who sleeps where, the facts nothing else has a column for, and the nearest
 # places it bothered to time.
 #
-# "line" is a second, indented line per stay; "off" leaves the table one row
-# each. There are `kind` and `traits` columns above for the middle ground, and
-# `list --no-facts` turns the line off for one run. It's a line rather than a
-# column because there is no width at which "soundproofed, historic building,
-# private entrance" fits one, and the trait that decides a stay is exactly the
-# one a truncated column would drop.
+# "lines" is both halves — what the place is, then what's around it. "line" is
+# the first only; "off" leaves the table one row each. There are `kind` and
+# `traits` columns above for the middle ground, and `list --no-facts` turns it
+# off for one run. It sits under the title rather than in a column because
+# there is no width at which "soundproofed, historic building, private
+# entrance" fits one, and the trait that decides a stay is exactly the one a
+# truncated column would drop.
+#
+# Unlabelled, and kept inside the title's column rather than run out under the
+# figures — that is what gives the numbers a straight left edge to follow. What
+# marks where one half ends is a hanging indent: a line flush with the margin
+# starts something new, an indented line is the last one carrying on.
 facts = "lines"
+# The most lines of write-up one stay gets, across both halves. 0 lets a stay
+# have as many as it has something to say for, which is the honest setting if
+# you don't mind the height — every stay still keeps at least one line for
+# what's around it before any stay gets a second for what's in it.
+facts_lines = 0
 # The most traits the line will name before "+3" — an upper bound, not a
 # target. What actually decides is the width of your terminal: the line is
 # fitted to it and never wraps, because a two-line row in a thirty-row table
