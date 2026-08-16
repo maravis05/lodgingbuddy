@@ -5,10 +5,11 @@
  * runs on Windows. The Chrome extension can't bridge that (it uses Native
  * Messaging, which is same-machine only). But the browser has already rendered
  * the page and already passed any bot wall — so the data is sitting right
- * there. This pulls the fields out and copies a ready-to-run command.
+ * there. This pulls the fields out and copies them, as JSON, to the clipboard.
+ * Paste that at the stays> prompt.
  *
- * Build with:  python3 build_bookmarklet.py
- * Then paste the contents of bookmarklet.txt into a new bookmark's URL field.
+ * Build with:  python3 build_bookmarklet.py   (`python` on Windows)
+ * Then import bookmarklet.html, or drag its link onto the bookmarks bar.
  *
  * The extractor is split from the browser plumbing so it can be tested against
  * saved HTML under node — see test_bookmarklet.js.
@@ -521,8 +522,14 @@
 
   // ── browser plumbing ─────────────────────────────────────────────────────
   var rec = extract(browserContext());
-  var cmd = "./lodgingbuddy.py paste '" +
-    JSON.stringify(rec).replace(/'/g, "'\\''") + "'";
+
+  // The record alone, with no command wrapped round it. It used to copy
+  // `./lodgingbuddy.py paste '...'`, which reads as a Unix command line and is
+  // one on no version of Windows: cmd.exe doesn't take single quotes, and the
+  // `./` is wrong everywhere off Unix. The prompt reads raw JSON directly, so
+  // the wrapper bought nothing and cost a platform. Shell-quoting goes with
+  // it — JSON.stringify already escapes what needs escaping.
+  var cmd = JSON.stringify(rec);
 
   // What came off the page, named. A site that quietly changes its markup
   // shows up here as a missing line, which is the only way you'd notice
@@ -564,7 +571,7 @@
       (rec.name || "(unnamed)") + " — " + hint +
       (extras.length ? "\n\nAlso captured:\n  " + extras.join("\n  ")
                      : "\n\nNothing captured beyond the price.") +
-      (copied ? "\n\nPaste it into your Claude Code terminal." : "\n\n" + cmd)
+      (copied ? "\n\nPaste it at the stays> prompt." : "\n\n" + cmd)
     );
   }
 

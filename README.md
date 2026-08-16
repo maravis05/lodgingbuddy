@@ -40,6 +40,15 @@ And the command is spelled `python3` throughout, which is right on macOS and
 most Linux systems; on Windows it's `python`, or `py` if that isn't found.
 Substitute the one that works and nothing else changes between platforms.
 
+**Always name the interpreter.** Type `python lodgingbuddy.py`, not
+`.\lodgingbuddy.py` — and on macOS and Linux, `python3 lodgingbuddy.py` rather
+than `./lodgingbuddy.py`. The bare-path forms depend on things that aren't
+portable: an executable bit and a `#!` line on Unix, and on Windows a file
+association, which is worse than it sounds. `.\build_bookmarklet.py` in
+PowerShell doesn't run the script, it *opens* it in whatever app owns `.py` —
+frequently an editor. You get that program's startup logs in your terminal, no
+error, and nothing built. Naming the interpreter works identically everywhere.
+
 ## What reaches the internet
 
 Worth saying plainly, because a tool that quietly phones out is a tool you can't
@@ -71,7 +80,7 @@ $ python3 lodgingbuddy.py
 lodgingbuddy — 4 stays in stays. `help` for what this takes.
 stays> https://www.booking.com/Share-LjP6kp 480
   Strathisla Oban [booking.com] · 3 nts · 480 GBP all-in · 80/share/nt
-stays> ./lodgingbuddy.py paste '{"source":"sykes",...}' 582
+stays> {"source":"sykes","name":"Heather Island View",...} 582
   Heather Island View [sykes] · 3 nts · 582 GBP all-in · 97/share/nt
 stays> list
 ```
@@ -86,7 +95,7 @@ after you click through to book. So the total can be its own line — the lines
 after a capture know what they're about:
 
 ```console
-stays> ./lodgingbuddy.py paste '{"source":"booking.com",...}'
+stays> {"source":"booking.com","name":"Strathisla Oban",...}
   Strathisla Oban [booking.com] · 3 nts
     no price — type the total on the next line
 stays> 582
@@ -529,15 +538,16 @@ Rebuild after editing `bookmarklet.js`, and reinstall.
 
 **Use.** Open a listing, click the bookmark. It reads the page's schema.org
 JSON-LD, its `__NEXT_DATA__` blob, and failing those the visible text, then
-copies a ready-to-run `./lodgingbuddy.py paste '{...}'` command to your
-clipboard and tells you what it found. Paste that at the prompt, with the total
-after a space if you have it — or on the next line, once you've clicked through
-to book and know what it is.
+copies the record to your clipboard as JSON and tells you what it found. Paste
+that at the `stays>` prompt, with the total after a space if you have it — or on
+the next line, once you've clicked through to book and know what it is.
 
-Paste it at the `stays>` prompt, not into a terminal. The prompt reads the line
-itself and only wants the `{...}` part, so the `./lodgingbuddy.py` in front is
-ignored and the quoting is handled internally — which is why that text is the
-same on every platform even though it looks like a macOS or Linux command.
+What it copies is the bare `{...}` and nothing else. It used to wrap that in a
+`./lodgingbuddy.py paste '…'` command line, which read as a shell command and
+was one on no version of Windows — `cmd.exe` doesn't take single quotes, and the
+`./` is wrong off Unix. The prompt reads raw JSON directly, so the wrapper
+bought nothing and cost a platform. The old form still parses, so anything
+already sitting on a clipboard keeps working.
 
 For Booking.com it is the *only* route to anything but the price, since the
 property pages are WAF-locked to everything that isn't a browser. It reads the

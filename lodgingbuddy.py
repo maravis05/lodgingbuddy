@@ -8,11 +8,14 @@ dates, sleeps, bedrooms, review score, and price where the site will give one
 up. Anything missing you fill in with `set`. Then `list` puts them side by side
 and sorts them however you like.
 
-    ./lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/...
-    ./lodgingbuddy.py add https://www.booking.com/Share-LjP6kp --price 480
-    ./lodgingbuddy.py set the-distillers-den --price 480 --note "free whisky"
-    ./lodgingbuddy.py list --sort share
-    ./lodgingbuddy.py refresh
+    python3 lodgingbuddy.py add https://www.sykescottages.co.uk/cottage/...
+    python3 lodgingbuddy.py add https://www.booking.com/Share-LjP6kp --price 480
+    python3 lodgingbuddy.py set the-distillers-den --price 480 --note "free whisky"
+    python3 lodgingbuddy.py list --sort share
+    python3 lodgingbuddy.py refresh
+
+(`python` rather than `python3` on Windows. Always name the interpreter rather
+than running the script by bare path; see RUN below for why.)
 
 Run it with no arguments for a prompt that holds open across a browsing
 session. `db` keeps more than one set of stays apart, since a trip you're
@@ -30,6 +33,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import shlex
 import sys
 import textwrap
@@ -39,6 +43,18 @@ import database
 import proximity
 import scoring
 import sources
+
+
+# How to tell someone to run this, in the spelling that works where they are.
+# Never `./lodgingbuddy.py`: Windows resolves a bare script path through file
+# associations, so it opens the file in whatever owns .py — frequently an
+# editor — and reports no error while doing nothing. Naming the interpreter is
+# the only form that behaves the same everywhere. Which name, though, differs:
+# `python3` is absent from most Windows installs, and `python` is not reliably
+# Python 3 on older Unixes. One each.
+# From __file__ rather than sys.argv[0], which is "-c" under `python -c` and a
+# module path when something imports us — neither of which anyone can type.
+RUN = ("python " if os.name == "nt" else "python3 ") + os.path.basename(__file__)
 
 
 # ──────────────────────────────── storage ──────────────────────────────────
@@ -403,7 +419,7 @@ def cmd_list(args) -> int:
 
     stays = load()
     if not stays:
-        print("Nothing captured yet.\n  ./lodgingbuddy.py add <url>")
+        print(f"Nothing captured yet.\n  {RUN} add <url>")
         return 0
 
     rate = args.rate
@@ -679,13 +695,13 @@ def cmd_paste(args) -> int:
         if rec.get("price_basis") == "indicative":
             print('  that is a "from" price, not a quote for these dates — '
                   "click through to book and set the real total:")
-            print(f"    ./lodgingbuddy.py set {rec['code']} --price <total> --incl-tax")
+            print(f"    {RUN} set {rec['code']} --price <total> --incl-tax")
     elif candidates:
         # Several plausible amounts on the page and no way to tell which is the
         # total — offering the list beats guessing wrong.
         print("  couldn't tell which amount is the total. Candidates:")
         print("    " + ", ".join(f"{c:g}" for c in candidates))
-        print(f"  set it with:  ./lodgingbuddy.py set {key_of(rec)} --price <n>")
+        print(f"  set it with:  {RUN} set {key_of(rec)} --price <n>")
     else:
         print("  no price on the page — add one with `set`")
     return 0
@@ -955,10 +971,11 @@ def as_number(text: str | None) -> float | None:
 def parse_entry(line: str) -> tuple[str, object, float | None] | None:
     """Read one line of the prompt into (kind, payload, total), or None.
 
-    Three things get pasted here and all of them are welcome: a bare URL, raw
-    JSON, or the whole `./lodgingbuddy.py paste '{...}'` command line the
-    bookmarklet puts on the clipboard. Any of them may be followed by a space
-    and the total you're paying.
+    Three things get pasted here and all of them are welcome: a bare URL, the
+    raw JSON the bookmarklet puts on the clipboard, or a whole
+    `... paste '{...}'` command line — which older builds of the bookmarklet
+    copied, and which still arrives from anyone who typed it. Any of them may
+    be followed by a space and the total you're paying.
     """
     line = line.strip()
     if not line:
@@ -1114,13 +1131,13 @@ PROMPT_HELP = """\
   Add a space and the total you're paying to record it:
 
       https://www.booking.com/Share-abc123 480
-      ./lodgingbuddy.py paste '{...}' 582
+      {"source":"booking.com",...} 582
 
   A total typed here is taken as the final price, tax included. On its own
   line it does the same, to whatever you captured last — which is the usual
   way round, since the real total only shows up once you click through:
 
-      ./lodgingbuddy.py paste '{...}'
+      {"source":"booking.com",...}
       582
 
   Anything else that isn't a command is filed as that stay's summary. The
@@ -1143,7 +1160,7 @@ def cmd_watch(args) -> int:
     except ImportError:
         pass
 
-    # Bare `./lodgingbuddy.py` parses no subcommand, so there is no --rate.
+    # Run with no subcommand, argparse sets no --rate, so ask for it carefully.
     rate = getattr(args, "rate", None) or config.DEFAULT_RATE
     print(f"lodgingbuddy — {tally(database.current())} in "
           f"{database.current()}. `help` for what this takes.")
