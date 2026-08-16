@@ -526,11 +526,20 @@ rather than summing, and an included fee is not taxed:
 ```
 Princes St   602.14 × 1.20 × 1.05              = 758.70   checkout: £758.70
 Royal Mile  (673.24 − 78) × 1.20 × 1.05 + 78   = 828.00   checkout: £828.00
+Calton Hill  480.21 × 1.20 × 1.05              = 605.06   checkout: £605.07
 ```
 
-Both to the penny, and no other arrangement of the same numbers lands on
-either. The rates are read off the page rather than hardcoded, so a city with a
+To the penny on the first two, and a rounding penny out on the third: the
+figure in the URL is the pre-tax price already rounded to pence, so a base of
+£480.2142 arrives as £480.21 and the last decimal has nowhere to come from.
+No other arrangement of the same numbers lands anywhere near any of the three.
+The rates are read off the page rather than hardcoded, so a city with a
 different levy needs no change here.
+
+Calton Hill also carried a 10% Genius discount, which turns out not to matter:
+the price in the URL is already the discounted one, and a discount that
+multiplies commutes with the tax rates that multiply after it. "Applied before
+taxes and charges" and taking it off the gross total are the same arithmetic.
 
 A price that got there this way is marked `=` in the table, and `show` names the
 rates that went into it. Where the page doesn't state them — or states something

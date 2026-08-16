@@ -397,6 +397,13 @@
     no: "NOK", se: "SEK", dk: "DKK", pl: "PLN", is: "ISK"
   };
 
+  // Where a room offers several rate plans the section states these lines once
+  // per plan, and this reads the first. Taken as deliberate: the tax a city
+  // levies doesn't depend on whether you can cancel, and a fee for cleaning the
+  // place doesn't either. Observed holding on a two-plan page — non-refundable
+  // and free-cancellation, identical Excluded lines. Revisit if a page turns up
+  // where they differ, because then the first plan's charges would be getting
+  // applied to a different plan's price.
   function parseCharges(text) {
     var out = { taxes: null, fees_included: null };
     if (!text) return out;
