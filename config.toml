@@ -250,16 +250,25 @@ price_unit = 25
 # suit these can restate the list in its own cityconf.toml, which replaces this
 # one outright.
 #
-# And a stay with no walk figure at all scores zero here, exactly like one two
-# hours out. That is a data gap wearing the costume of a verdict, and every
-# point added to this tier widens it. `list` names them under the table, and
-# `set <id> --address '…'` is what fixes a pin the router can't walk out of.
+# Zero means "nobody told us", so being far out has to cost something rather
+# than earn nothing. A stay with no walk figure scores zero here — five of the
+# twenty Oban ones do, because the router can't get a route out of the pin —
+# and until the last two bands existed, an hour and three quarters out of town
+# scored exactly the same, which reads as a verdict and is a gap in the data.
+# Now an unknown is neutral and a known distance is an answer either way, which
+# is the only arrangement where the two can't be confused. `list` names the
+# unmeasured ones under the table; `set <id> --address '…'` fixes the pin.
+#
+# The last band has to be a catch-all, because a value past every band scores
+# zero — which is the thing being fixed.
 [scoring.tiers.walk_minutes]
 direction = "lower"
 steps = [
-  { max = 10, points = 35 },   # out the door and you're there
-  { max = 20, points = 22 },   # a walk, but nobody complains
-  { max = 35, points = 9 },    # you'd do it once, in good weather
+  { max = 10, points = 35 },      # out the door and you're there
+  { max = 20, points = 22 },      # a walk, but nobody complains
+  { max = 35, points = 9 },       # you'd do it once, in good weather
+  { max = 60, points = -8 },      # you knew when you booked it you'd be driving
+  { max = 100000, points = -20 }, # a drive, every time, both ways
 ]
 
 # What previous guests said, as a percentage of full marks.
