@@ -788,6 +788,16 @@
         charges = parseCharges(ctx.text || "");
       }
       if (charges.taxes) rec.taxes = charges.taxes;
+      // A page with no Excluded line anywhere in it is not a page we failed to
+      // read — it is a property that adds nothing, and there are plenty: the
+      // small ones are under the VAT threshold and charge no VAT. Sending null
+      // for both makes the Python side estimate 20% onto a total that is
+      // already the total, and it did, to three of the twenty Oban stays. The
+      // whole rendered page is the evidence, not the block: the word appearing
+      // nowhere on it is a much stronger statement than the block selector
+      // having come back empty, which is why this is checked here rather than
+      // inferred from parseCharges having found nothing.
+      else if (!/excluded\s*:/i.test(ctx.text || "")) rec.taxes = [];
       if (charges.fees_included) rec.fees_included = charges.fees_included;
 
       // Booking.com encodes the selected blocks' prices in sr_pri_blocks, as

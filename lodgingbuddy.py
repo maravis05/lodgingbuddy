@@ -137,8 +137,14 @@ def merge_over(existing: dict | None, fresh: dict) -> dict:
     confirmed = existing.get("price_basis") == "quoted"
     incoming_is_soft = fresh.get("price_basis") != "quoted"
     if confirmed and incoming_is_soft:
-        for field in ("price", "currency", "price_basis", "tax_included",
-                      "native_price", "native_currency"):
+        # The typed total, and only that. The listing figure off the link used
+        # to be held back with it, from when typing a total cleared it — so a
+        # stay you had confirmed could never get it back, and re-capturing the
+        # page put the old absence over the new reading. It is not a competing
+        # price now that `all_in` prefers what you typed; it is the other half
+        # of an exchange rate, and a capture is not allowed to subtract
+        # knowledge.
+        for field in ("price", "currency", "price_basis", "tax_included"):
             fresh[field] = existing.get(field)
 
     # A capture adds knowledge; it never subtracts it. Anything the new one is
@@ -176,14 +182,30 @@ def with_stated_charges(price: float, cur: str, rec: dict) -> float | None:
     and 673.24 with a £78 cleaning fee comes to 828.00, each to the penny, and
     no other arrangement of the same numbers does.
 
-    None when the page didn't say, which leaves the flat-VAT estimate to it.
+    An empty `taxes` is not the same fact as no `taxes` at all, and the whole
+    of this reads on the difference:
+
+        []    the page was read and listed nothing excluded, so the quoted
+              price is the whole bill
+        None  nobody looked, or the look failed — unknown, and the flat VAT
+              estimate stands in
+
+    Which is worth the distinction because plenty of these properties sit under
+    the VAT threshold and charge none. Checked on Feochan View: no Excluded
+    line anywhere on the page, £295.00 in the URL, and a checkout reading
+    "Total $399.68 — includes taxes and fees. In property currency: £295" —
+    the same 295, so nothing was waiting at the end. Three of the twenty Oban
+    stays are that, and each one had 20% added to it that nobody charges.
+
     A fee in a currency that isn't the price's is not subtracted from it, since
     that would be arithmetic on two different units; it makes the whole sum
     unanswerable and returns None rather than something plausible.
     """
     taxes = rec.get("taxes")
-    if not taxes:
+    if taxes is None:
         return None
+    if not taxes:
+        return round(price, 2)
 
     fees = rec.get("fees_included") or []
     fee_total = 0.0
@@ -211,6 +233,8 @@ def with_stated_charges(price: float, cur: str, rec: dict) -> float | None:
 
 def stated_charges_note(rec: dict) -> str:
     """The sum in words: which rates went on, and what wasn't taxed."""
+    if not rec.get("taxes"):
+        return "the page listed nothing excluded, so that is the whole bill"
     parts = [f"{t.get('rate', 0):.0%} {t.get('label') or 'tax'}"
              for t in rec.get("taxes") or []]
     note = "the page's own rates applied: " + " then ".join(parts)
@@ -231,16 +255,26 @@ def all_in(rec: dict) -> tuple[float | None, str, str]:
     Booking flatteringly 20% under everything else.
 
     Where we have the property's own currency price we prefer it, since it
-    hasn't been through the OTA's exchange rate.
+    hasn't been through the OTA's exchange rate — but not over a total typed off
+    the checkout page. That one is the bill: it is what the site is about to
+    charge, for these dates, with everything in it, and a search result's
+    headline figure does not outrank it however clean its currency.
+
+    `tax_included` describes the typed price, because that is the only one whose
+    basis can vary. `native_price` is always the listing figure before the
+    excludes the page advertises — that is what sr_pri_blocks holds, by
+    construction — so choosing it settles the flag as well.
     """
     price = rec.get("price")
     cur = rec.get("currency") or ""
-    if rec.get("native_price") and rec.get("native_currency"):
+    typed = price and rec.get("price_basis") == "quoted"
+    included = rec.get("tax_included")
+    if not typed and rec.get("native_price") and rec.get("native_currency"):
         price, cur = rec["native_price"], rec["native_currency"]
+        included = False
     if not price:
         return None, cur, "inclusive"
 
-    included = rec.get("tax_included")
     if included is False:
         computed = with_stated_charges(price, cur, rec)
         if computed is not None:
@@ -289,13 +323,63 @@ def rate_from(stays: list[dict]) -> float | None:
     `--rate` still overrides, and `[currency] default_rate` still stands in
     where a database holds no pairs at all.
     """
-    seen = [r["display_price"] / r["native_price"] for r in stays
-            if r.get("display_price") and r.get("native_price")
-            and r.get("display_currency") == config.QUOTE_CURRENCY
-            and r.get("native_currency") == config.BASE_CURRENCY]
+    seen = [r for r in (rate_of(s) for s in stays) if r]
     if not seen:
         return config.DEFAULT_RATE
     return sorted(seen)[len(seen) // 2]
+
+
+# Wider than any real rate, and meant to be: this is not a plausibility test on
+# the exchange rate, it is a catch for a pairing that went wrong — a fee scraped
+# as a total, the wrong room's price read. A number that survives this and is
+# still wrong will be wrong in company, and the median is what handles that.
+_RATE_BAND = (0.2, 5.0)
+
+
+def rate_of(rec: dict) -> float | None:
+    """The exchange rate this one stay implies, or None if it implies none.
+
+    Two ways a record ends up holding the same money in two currencies, and both
+    are the same division once the two halves are put on the same footing.
+
+    A total typed off the checkout page is the bill, tax and fees in it. The
+    comparable native figure is therefore not `native_price` — that is the
+    listing price — but the checkout total it comes to, which is only a number
+    we have where the page stated its own charges: `with_stated_charges`
+    returning something is exactly that condition, and nothing else here will
+    do. Dividing the typed total by the listing price instead gives a rate 20%
+    out and perfectly steady, which is the kind of wrong nobody notices.
+
+    Neither will the flat VAT estimate, which is what this used to divide by and
+    is the reason it is written out here rather than taken from a helper that
+    quietly falls back to one. An estimate on the bottom of that division makes
+    its error the rate's error, on every row of the table, for as long as the
+    median lets it through: three Oban stays whose pages state no charges at all
+    came out at 1.1290 against a real 1.3548, and a table converted at that reads
+    every stay at its pre-tax dollar figure under an "All-in" heading. A rate has
+    to be two measurements of one sum. Where the second isn't measured, this
+    stay implies no rate, and says so.
+
+    The other way needs no arithmetic at all: the bookmarklet reads the listing
+    price off the link and the same listing price off the rendered page, in
+    whatever currency the page was showing. Both pre-tax, both the same room.
+    """
+    lo, hi = _RATE_BAND
+    price, cur = rec.get("price"), rec.get("currency")
+    listed, lcur = rec.get("native_price"), rec.get("native_currency")
+    native = with_stated_charges(listed, lcur, rec) if listed and lcur else None
+    if (price and cur == config.QUOTE_CURRENCY and native
+            and lcur == config.BASE_CURRENCY
+            and rec.get("price_basis") == "quoted"
+            and rec.get("tax_included") is not False
+            and lo <= price / native <= hi):
+        return price / native
+
+    shown, scur = rec.get("display_price"), rec.get("display_currency")
+    if (shown and scur == config.QUOTE_CURRENCY and listed
+            and lcur == config.BASE_CURRENCY and lo <= shown / listed <= hi):
+        return shown / listed
+    return None
 
 
 def in_base(amount: float | None, cur: str) -> tuple[float | None, str]:
@@ -544,46 +628,33 @@ def cmd_set(args) -> int:
     # Before anything is set, so `--drop-price --native-price N` reads left to
     # right: forget mine, here is the right one.
     #
-    # A typed total outranks a captured one everywhere — that is the whole point
-    # of typing it — and until this existed there was no way back. Which mattered
-    # more than it sounds: `paste` used to announce "no price on the page" over a
-    # perfectly good captured figure, and the totals typed in answer to that were
-    # off a page quoting dollars for a property that bills in pounds, so they
-    # were 20% short and in the wrong unit, and re-capturing wouldn't shift them
-    # because a typed price is exactly what re-capturing is careful not to break.
+    # A typed total outranks a captured one — that is the point of typing it —
+    # and there was no way back before this. Mistyping one is the ordinary case
+    # it exists for. The other case is historical: `paste` used to announce "no
+    # price on the page" over a perfectly good captured figure, so totals got
+    # typed in answer to a question that shouldn't have been asked, and a typed
+    # price is exactly what re-capturing is careful not to overwrite.
     if getattr(args, "drop_price", False):
-        typed, typed_cur = rec.get("price"), rec.get("currency")
-        typed_pretax = rec.get("tax_included") is False
         rec["price"] = None
         rec["price_basis"] = None
         rec["tax_included"] = None
-        # And put back what the capture had, where the link still carries it.
-        # Typing a total clears the captured figure, so dropping the typed one
-        # would otherwise leave the stay with no price at all and nothing to
-        # re-capture from short of opening the page again.
+        # apply_total keeps the native figure now, so dropping a typed total
+        # usually just hands the record back to it. Records typed at before that
+        # changed had it cleared, and the link still carries it — so recover it
+        # rather than leaving a stay with no price and nowhere to get one short
+        # of opening the page again.
         if not rec.get("native_price") and rec.get("source") == "booking.com":
             amount, blocks = sources.booking_blocks(rec.get("url") or "")
             if amount is not None:
                 rec["native_price"] = amount
                 # Deliberately not rec["currency"], which on Booking is the
-                # currency the page was displaying — the thing that started all
-                # this. What the property bills in is what native means.
+                # currency the page was displaying. What the property bills in
+                # is what native means.
                 rec["native_currency"] = config.NATIVE_CURRENCY
                 rec["price_basis"] = "indicative"
                 rec["tax_included"] = False
                 if blocks > 1:
                     rec["rooms"] = blocks
-                # The number you typed was what the page was showing, so it is
-                # worth keeping as the one thing the record didn't have: the
-                # same money in two currencies, which is the rate. Kept only
-                # against a single-unit booking, on the same pre-tax basis as
-                # the native figure, and inside a sane band — the same three
-                # conditions apply_total applies, and for the same reason.
-                if (typed and typed_cur and typed_pretax
-                        and typed_cur != rec["native_currency"]
-                        and blocks == 1 and 0.2 <= typed / amount <= 5):
-                    rec["display_price"] = typed
-                    rec["display_currency"] = typed_cur
     for field in ("name", "nights", "adults", "rooms", "note", "currency",
                   "score", "native_price", "native_currency", "offer",
                   "shares", "bedrooms", "bathrooms", "sleeps",
@@ -1459,9 +1530,10 @@ def links(stays: list[dict], sort: str, count: int) -> None:
 TAX_NOTES = {
     "added": lambda: (f"VAT added by us at {config.VAT_RATE:.0%} — the site "
                       f"quoted a pre-tax price."),
-    "computed": lambda: ("the page stated its tax rates and fees, so that is "
-                         "the arithmetic done rather than a flat VAT estimate. "
-                         "`show <id>` names the rates."),
+    "computed": lambda: ("the page's own charges, so that is the arithmetic "
+                         "done rather than a flat VAT estimate — including "
+                         "where what it listed was nothing, which is a real "
+                         "answer and not a missing one. `show <id>` says which."),
     "unknown": lambda: ("tax status unknown; shown as quoted. Mark it with "
                         "`set <id> --incl-tax` or `--excl-tax`."),
 }
@@ -1553,10 +1625,15 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
         # Where the rate came from matters as much as what it is. One read off
         # the captures is a fact about the pages you looked at; one typed into
         # config.toml is a fact about whenever somebody last typed it.
-        pairs = sum(1 for r in stays if r.get("display_price")
-                    and r.get("native_price"))
-        source = (f"the median of {pairs} capture{'s' if pairs != 1 else ''} "
-                  f"holding both currencies" if pairs and rate == RATE
+        # Counted the way the rate is worked out, not off one of the two shapes
+        # that can imply it: a stay pairing a typed checkout total with the
+        # total the page's own charges come to says as much about the rate as a
+        # capture holding two renderings of the listing price, and counting only
+        # the second credited a measured rate to a constant in config.toml.
+        pairs = sum(1 for r in stays if rate_of(r))
+        source = (f"the median of {pairs} stay{'s' if pairs != 1 else ''} "
+                  f"holding the same money in both currencies"
+                  if pairs and rate == RATE
                   else "as asked for on the command line" if rate != RATE
                   else f"[currency] default_rate in {config.PATH.name}")
         print(f"{config.BASE_CURRENCY} converted at "
@@ -1864,36 +1941,51 @@ def cmd_paste(args) -> int:
     # Through all_in, not off rec["price"]. Booking.com's capture files its
     # figure in native_price — the property's own currency, off the URL — and
     # leaves `price` null, so a test on `price` alone calls every Booking
-    # capture priceless and says so in as many words. Which is a lie that gets
-    # believed: told there was no price, you go to the page and type the number
-    # on it, and Booking shows a US-currency account the pre-VAT total, so a
-    # correct £258.70 becomes a $350.50 that is 20% short and in the wrong unit.
-    # Three of the twenty Oban stays were captured that way. The predicate the
-    # table uses is the predicate this line has to use.
+    # capture priceless and says so in as many words. Which is a lie that costs
+    # something: told there was no price, you go and fetch one, and three of the
+    # twenty Oban stays got a total typed into them that the tool already had.
+    # The predicate the table uses is the predicate this line has to use.
     amount, cur, tax = all_in(rec)
     if amount:
+        # In the unit the table is read in, which `set` and `show` already do.
+        # This line not doing it was the last place the tool said "354.00 GBP"
+        # about a stay it prints as $479 two commands later, and the way to
+        # answer that is to go and read a dollar figure off the page.
+        amount, cur = converted(amount, cur, RATE)
         print(f"  {amount:,.2f} {cur or ''}".rstrip()
               + {"inclusive": " all-in",
-                 "computed": " all-in, on the rates and fees the page stated",
+                 # In the page's own words, which is the difference between
+                 # "20% VAT then 5% City tax" and "it listed nothing" — two
+                 # facts that produce very different totals and used to print
+                 # the same sentence.
+                 "computed": " all-in, " + stated_charges_note(rec),
                  "added": f" all-in, with {config.VAT_RATE:.0%} VAT added here "
                           f"because the site quoted a pre-tax price",
                  "unknown": " as quoted — nobody said whether tax is in it",
                  }.get(tax, ""))
         if rec.get("price_basis") == "indicative" and tax == "added":
-            # Naming the unit in the suggested command on purpose. The figure
-            # above is the property's own currency; the total on screen may not
-            # be, and a typed number filed under the wrong one is invisible.
-            print("  arithmetic rather than a checkout quote. If the booking "
-                  f"page's own total differs, that one wins — in whatever "
-                  f"currency it is quoting you:")
-            print(f"    {RUN} set {rec['code']} --price <total> --incl-tax "
-                  f"--currency {cur}")
+            # Naming the unit in the suggested command on purpose, and naming
+            # the one the page is quoting *you* — which is what you will be
+            # copying, and is not the property's own currency. Handing over
+            # `--currency GBP` under a sentence about whatever currency it is
+            # quoting you is how a dollar total gets filed as pounds, which
+            # nothing downstream can see is wrong.
+            quoted = rec.get("currency") or cur
+            print("  arithmetic rather than a checkout quote. Click through to "
+                  "book: that total is the bill, and it wins —")
+            print(f"    {RUN} set {rec['code']} --price <total> "
+                  f"--currency {quoted}")
     elif candidates:
         # Several plausible amounts on the page and no way to tell which is the
-        # total — offering the list beats guessing wrong.
-        print("  couldn't tell which amount is the total. Candidates:")
+        # total — offering the list beats guessing wrong. Said as what they are,
+        # which is figures off a listing: a headline price is what most of them
+        # will be, and what `set --price` now records is the bill. Handing over
+        # a list of numbers under the word "total" is how the first of those
+        # becomes the second.
+        print("  couldn't tell which amount is the total. On the page:")
         print("    " + ", ".join(f"{c:g}" for c in candidates))
-        print(f"  set it with:  {RUN} set {key_of(rec)} --price <n>")
+        print(f"  the checkout total beats any of them:  {RUN} set "
+              f"{key_of(rec)} --price <total>")
     else:
         print("  no price on the page — add one with `set`")
     return 0
@@ -2392,18 +2484,20 @@ def apply_total(rec: dict, total: float, currency: str | None = None,
                 tax_included: bool | None = None) -> None:
     """Record a total typed at the prompt, and let it win.
 
-    You typed it off the booking page, so it is a quote for these dates. It also
-    clears any scraped native price, which `all_in` would otherwise prefer —
-    leaving that in place would show you a number you didn't type and can't
-    account for.
+    You typed it off the booking page with your card out, so it is the final
+    number: quoted for these dates, everything in it. That is what
+    `tax_included` defaults to true means, and it is not an assumption about
+    what site you were on — it is what typing a total at this prompt is for.
+    `--excl-tax` is there for the day you type a pre-tax figure on purpose.
 
-    What it does not assume any more is that tax is in it. That used to be
-    hard-coded true on the reasoning that a number off a booking page is the
-    final number, which is right about a checkout page and wrong about a listing
-    on a site the settings already describe as quoting pre-tax — and Booking.com
-    is exactly that site for anyone whose account displays in dollars. The
-    source's own `tax_included` is the better answer, and `--incl-tax` is still
-    there for the case where you really did read it off the last screen.
+    The scraped native price is kept rather than cleared. `all_in` prefers a
+    typed quote over a listing figure now, so keeping it costs nothing and buys
+    two things: the listing price stays on the record as evidence, and where the
+    page also stated what it excludes, the pair of them is an exchange rate —
+    the same money twice, your total against the total the listing figure comes
+    to. No constant in config.toml and no FX service. Where the page stated
+    nothing the pair is one equation in two unknowns, the rate and whatever was
+    added, and `rate_of` declines it rather than assuming one of them.
 
     The currency comes from the same place the number did — you — and only when
     you gave one. Where you didn't, the site's own currency stands: it is a
@@ -2411,32 +2505,11 @@ def apply_total(rec: dict, total: float, currency: str | None = None,
     price with no unit at all, and `list` says when a table has ended up holding
     two of them.
     """
-    unit = currency or rec.get("currency")
-    basis = (tax_included if tax_included is not None
-             else sources.site_for(rec).get("tax_included"))
-    # Before native gets cleared, because the pair is the whole value of it: a
-    # total you typed off a page showing dollars, against the pounds the same
-    # page encoded in its own link, is the exchange rate between them — measured
-    # rather than assumed.
-    #
-    # Only where the two are on the same tax basis, which is what `basis is
-    # False` is doing. A pre-tax figure over a pre-tax figure is a rate; a
-    # checkout total over a pre-tax room rate is a rate times 1.2, and it would
-    # not look wrong — it would look like a perfectly steady exchange rate that
-    # is twenty per cent out, on every row, for as long as nobody checked. So
-    # anything that isn't plainly both-pre-tax declines to be evidence.
-    native = rec.get("native_price")
-    if (native and rec.get("native_currency") and unit
-            and unit != rec["native_currency"] and basis is False
-            and 0.2 <= total / native <= 5):
-        rec["display_price"], rec["display_currency"] = total, unit
     rec["price"] = total
     if currency:
         rec["currency"] = currency
     rec["price_basis"] = "quoted"
-    rec["tax_included"] = basis
-    rec["native_price"] = None
-    rec["native_currency"] = None
+    rec["tax_included"] = True if tax_included is None else tax_included
     rec["status"] = sources.OK
 
 

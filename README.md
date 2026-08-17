@@ -38,10 +38,15 @@ running the script by bare path opens it in whatever owns `.py`.
 `<id>` matches, in order: the record key (`source:code`), a substring of the
 code, then a substring of the name.
 
-`set` takes `--price --native-price --native-currency --currency --incl-tax
---excl-tax --nights --adults --rooms --shares --bedrooms --bathrooms --sleeps
---score --score-scale --look --clean --amenities --address --summary --offer
---note`.
+`set` takes `--price --drop-price --native-price --native-currency --currency
+--incl-tax --excl-tax --nights --adults --rooms --shares --bedrooms
+--bathrooms --sleeps --score --score-scale --look --clean --amenities
+--address --summary --offer --note`.
+
+A `--price` you type is taken as the bill — quoted for these dates, everything
+in it — because that is what typing one at a checkout page is for.
+`--excl-tax` is there for the day you type a pre-tax figure on purpose, and
+`--drop-price` forgets one and hands the stay back to what was captured.
 
 `list --sort` takes `value` (default), `share`, `price`, `score`, `sleeps`,
 `walk`, `points`, `checkin`, `name`.
@@ -158,22 +163,50 @@ declares `tax_included`, and `all_in()` resolves a stay to one figure:
 | --- | --- | --- |
 | true | the price as quoted | none |
 | false, page stated its rates | rates applied in order, compounding, over the price less any included fee | `=` |
-| false, nothing stated | `price × (1 + vat_rate)` | `+` |
+| false, page stated no charges (`taxes: []`) | the price as quoted — it is the whole bill | `=` |
+| false, nothing read (`taxes: null`) | `price × (1 + vat_rate)` | `+` |
 | unset | price shown untouched | `?` |
 
+The two `false` middle rows are one distinction doing a lot of work. An empty
+`taxes` means the page was read and listed nothing excluded, which plenty of
+small properties genuinely do — they are under the VAT threshold. A missing
+`taxes` means nobody could tell, and only then is 20% assumed. Reading them the
+same way put 20% onto stays that get charged none.
+
 A `~` marks a price flagged `indicative` — a "from" headline rather than a
-quote for the dates — unless the total was computed from stated rates, in which
-case it is exact and the mark is dropped. A `native_price` (the property's own
-currency, before an OTA's conversion) is preferred over the display price when
-present.
+quote for the dates — unless the total was settled from what the page stated,
+in which case it is exact and the mark is dropped. A total you typed off a
+checkout page outranks everything: it is the bill. Below that, a `native_price`
+(the property's own currency, before an OTA's conversion) is preferred over the
+display price.
 
 From the all-in figure: `per_share_total` = all-in ÷ shares, and `share_nt` =
 that ÷ nights. Shares are billing units, not people — a couple and a
 singleton are two shares. Set the trip default in `[split]`, override per stay
 with `set <id> --shares`.
 
-`--rate` converts the display column only. It deliberately does not reach
-`value`.
+`--rate` overrides the rate for one run.
+
+## The exchange rate
+
+Prices are held in `[currency] base` — what the property itself bills in — and
+read in `quote`. The rate between them is not configured; it is read off the
+stays, as the median of every one that holds the same money in both currencies:
+
+- a capture holding the listing price off the link **and** the same listing
+  price as the page rendered it, which is what the bookmarklet records; or
+- a checkout total you typed **and** the total the listing price comes to once
+  the page's own stated charges are applied.
+
+The second only counts where the page stated its charges (including stating
+none). Dividing a checkout total by a *guessed* all-in gives a rate that is 20%
+out and perfectly steady, which is the kind of wrong nobody notices — so a stay
+that can't supply both halves supplies no rate.
+
+Everything lands on the base scale before `value` or the sort touches it, so a
+stay filed in dollars is not ranked against stays filed in pounds by dividing
+one by the other. `[currency] default_rate` stands in for a database holding no
+such pair, and `list --rate` overrides both.
 
 ## Scoring
 

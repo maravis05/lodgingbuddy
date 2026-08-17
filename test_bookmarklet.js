@@ -230,7 +230,16 @@ const SOURCE_CASES = [
     name: "neither states them, so nothing is invented",
     rooms: "Private kitchen\nPrivate bathroom",
     text: "Royal Mile Apartment\nFree cancellation before September 9, 2026",
-    want: { taxes: 0, fee: null }
+    want: { taxes: 0, fee: null, stated: "none" }
+  },
+  // The word is on the page and the rates aren't readable off it. That is a
+  // page we failed to read, and it must not come back looking like a page that
+  // charges nothing — the difference is 20% of the bill, silently.
+  {
+    name: "the word is there but the rates aren't, so it stays unknown",
+    rooms: "Private kitchen\nPrivate bathroom",
+    text: "Royal Mile Apartment\nExcluded: taxes and charges may apply",
+    want: { taxes: 0, fee: null, stated: "unknown" }
   },
 ];
 
@@ -492,6 +501,15 @@ function checkSources() {
     const fee = rec.fees_included ? rec.fees_included[0].amount : null;
     if (taxes !== c.want.taxes) {
       problems.push(`taxes: got ${taxes}, want ${c.want.taxes}`);
+    }
+    // An empty list and no list are different answers — "the page lists nothing
+    // excluded" against "we don't know" — and the count above can't tell them
+    // apart, which is how the second was going out dressed as neither.
+    const stated = rec.taxes === null || rec.taxes === undefined ? "unknown"
+      : rec.taxes.length ? "rates" : "none";
+    const want = c.want.stated || "rates";
+    if (stated !== want) {
+      problems.push(`stated: got ${stated}, want ${want}`);
     }
     if (fee !== c.want.fee) {
       problems.push(`fee: got ${fee}, want ${c.want.fee}`);
