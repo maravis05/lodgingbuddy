@@ -85,14 +85,24 @@ DIM, BOLD, LEAD = paint("2"), paint("1"), paint("32")
 
 # ──────────────────────────────── storage ──────────────────────────────────
 
+# The rate the loaded database's own captures imply, worked out once per read.
+# Module-level for the same reason config's settings are: `in_base` is called
+# from inside the arithmetic — per column, per row, per sort comparison — and
+# threading a rate down to it would mean every caller of every helper carrying
+# one. Refreshed by `load`, which is also what refreshes the settings, so the
+# two can't get out of step with each other or with the database in hand.
+RATE: float | None = None
+
+
 def load() -> list[dict]:
     # Asked for on every read rather than resolved once at import, so that
     # switching databases at the prompt takes effect on the next line rather
     # than the next process.
+    global RATE
     path = database.path()
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
+    stays = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    RATE = rate_from(stays)
+    return stays
 
 
 def save(stays: list[dict]) -> None:
@@ -259,6 +269,35 @@ def from_mark(rec: dict, tax: str) -> str:
     return "~" if rec.get("price_basis") == "indicative" and tax != "computed" else ""
 
 
+def rate_from(stays: list[dict]) -> float | None:
+    """What a unit of the base currency is worth, read off the pages.
+
+    Every Booking capture of a foreign property holds the same money twice: the
+    pounds the property bills in, off its own link, and the dollars the page was
+    rendering that in. The ratio is the rate, and taking it from the stays means
+    there is no number in config.toml to go stale, no FX service to depend on,
+    and no question about which day's rate a table was built at — it is the rate
+    that was on screen when you captured.
+
+    The median, not the mean, and that is the whole robustness story: a pairing
+    that went wrong on one page — the wrong plan read, a fee scraped as a total
+    — is one value in a sorted list rather than a thumb on the average. Twenty
+    Oban stays put it at 1.3548 with the three independent observations agreeing
+    to four decimal places, which is a good deal more confidence than a constant
+    somebody typed in once.
+
+    `--rate` still overrides, and `[currency] default_rate` still stands in
+    where a database holds no pairs at all.
+    """
+    seen = [r["display_price"] / r["native_price"] for r in stays
+            if r.get("display_price") and r.get("native_price")
+            and r.get("display_currency") == config.QUOTE_CURRENCY
+            and r.get("native_currency") == config.BASE_CURRENCY]
+    if not seen:
+        return config.DEFAULT_RATE
+    return sorted(seen)[len(seen) // 2]
+
+
 def in_base(amount: float | None, cur: str) -> tuple[float | None, str]:
     """One amount in the base currency, where there is a rate to get it there.
 
@@ -273,8 +312,8 @@ def in_base(amount: float | None, cur: str) -> tuple[float | None, str]:
     A currency there is no rate for is left alone rather than guessed at, and
     the footnote under the table is what says so.
     """
-    if amount and cur == config.QUOTE_CURRENCY and config.DEFAULT_RATE:
-        return amount / config.DEFAULT_RATE, config.BASE_CURRENCY
+    if amount and cur == config.QUOTE_CURRENCY and RATE:
+        return amount / RATE, config.BASE_CURRENCY
     return amount, cur
 
 
@@ -413,11 +452,15 @@ def measure_walk(rec: dict) -> None:
         return
     origin = proximity.origin_of(rec)
     try:
-        minutes, _ = proximity.walk_times(origin, wanted)
+        minutes, problems = proximity.walk_times(origin, wanted)
     except (proximity.MapsError, proximity.NoKey, proximity.Unlocatable, OSError):
         return
     if minutes:
         rec["walk_minutes"] = minutes
+    # Kept even where nothing was measured, and especially then: a router that
+    # answers "no walking route from here" has answered, and a record that
+    # forgets it looks exactly like one nobody got round to.
+    rec["walk_problems"] = problems or None
 
 
 def weekday(iso: str | None) -> str:
@@ -509,6 +552,8 @@ def cmd_set(args) -> int:
     # were 20% short and in the wrong unit, and re-capturing wouldn't shift them
     # because a typed price is exactly what re-capturing is careful not to break.
     if getattr(args, "drop_price", False):
+        typed, typed_cur = rec.get("price"), rec.get("currency")
+        typed_pretax = rec.get("tax_included") is False
         rec["price"] = None
         rec["price_basis"] = None
         rec["tax_included"] = None
@@ -528,13 +573,35 @@ def cmd_set(args) -> int:
                 rec["tax_included"] = False
                 if blocks > 1:
                     rec["rooms"] = blocks
-    for field in ("name", "price", "nights", "adults", "rooms", "note", "currency",
+                # The number you typed was what the page was showing, so it is
+                # worth keeping as the one thing the record didn't have: the
+                # same money in two currencies, which is the rate. Kept only
+                # against a single-unit booking, on the same pre-tax basis as
+                # the native figure, and inside a sane band — the same three
+                # conditions apply_total applies, and for the same reason.
+                if (typed and typed_cur and typed_pretax
+                        and typed_cur != rec["native_currency"]
+                        and blocks == 1 and 0.2 <= typed / amount <= 5):
+                    rec["display_price"] = typed
+                    rec["display_currency"] = typed_cur
+    for field in ("name", "nights", "adults", "rooms", "note", "currency",
                   "score", "native_price", "native_currency", "offer",
                   "shares", "bedrooms", "bathrooms", "sleeps",
                   "score_scale", "look", "clean", "address", "summary"):
         val = getattr(args, field, None)
         if val is not None:
             rec[field] = val
+    # `--price` through apply_total rather than straight onto the field, because
+    # the two were not the same act and only one of them worked. all_in prefers
+    # a native price wherever there is one, so setting `price` beside an intact
+    # native figure left the typed number sitting in the record doing nothing —
+    # on Booking, which is every stay that has a native figure, `set --price`
+    # was quietly a no-op. apply_total is what the prompt has always used: it
+    # clears the native price so the typed one is the one in force, takes its
+    # tax basis from the source, and keeps the pair as an exchange rate.
+    if args.price is not None:
+        apply_total(rec, args.price, args.currency,
+                    True if args.incl_tax else False if args.excl_tax else None)
     if args.amenities is not None:
         # Replaces rather than adds: correcting a scrape usually means the list
         # was wrong, not short, and "how do I remove one" should not need a flag.
@@ -569,7 +636,7 @@ def cmd_set(args) -> int:
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
         # In the unit the table is read in, so a figure checked here against a
         # row up there is the same figure.
-        amount, cur = converted(amount, cur, config.DEFAULT_RATE)
+        amount, cur = converted(amount, cur, RATE)
         print(f"  all-in {amount:,.2f} {cur}{tail}")
     mark = scored(rec)
     if mark.points:
@@ -1181,7 +1248,7 @@ def cmd_list(args) -> int:
         print(f"Nothing captured yet.\n  {RUN} add <url>")
         return 0
 
-    rate = args.rate
+    rate = args.rate or RATE
     # Scored once per stay and reused: three columns and the sort all ask, and
     # the answer can't change underneath them mid-table.
     marks = {key_of(r): scored(r) for r in stays}
@@ -1431,18 +1498,35 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
     # that was rate-limiting for two minutes leaves five holes in a column you
     # rank on and never mentions it. Five of the twenty Oban stays, as it
     # happens, all of them holding perfectly good coordinates.
-    unmeasured = [r for r in stays
-                  if not (r.get("walk_minutes") or {})
-                  and (r.get("address") or (r.get("latitude") is not None
-                                            and r.get("longitude") is not None))]
-    if unmeasured:
+    located = [r for r in stays
+               if not (r.get("walk_minutes") or {})
+               and (r.get("address") or (r.get("latitude") is not None
+                                         and r.get("longitude") is not None))]
+    # Split, because the two have different fixes and only one of them is a
+    # command. A stay nobody has measured wants `walk`. A stay the router has
+    # already refused wants a different address, or a path mapping — running
+    # `walk` at it a second time gets the same answer, which is how a hole that
+    # will never close reads as one you keep forgetting to close.
+    refused = [r for r in located if r.get("walk_problems")]
+    unasked = [r for r in located if not r.get("walk_problems")]
+
+    def names(rs):
+        return ", ".join(sorted(r.get("name") or "?" for r in rs)[:4]) + \
+               (", …" if len(rs) > 4 else "")
+
+    if unasked:
         print("\n" + textwrap.fill(
-            f"{len(unmeasured)} of these have no measured walk and could have "
-            f"one — they hold a location, the lookup just didn't happen or "
-            f"didn't answer. `walk` picks up exactly those and leaves the rest "
-            f"alone: " + ", ".join(sorted(r.get("name") or "?"
-                                          for r in unmeasured)[:4])
-            + (", …" if len(unmeasured) > 4 else ""), width=76))
+            f"{len(unasked)} of these have no measured walk and could have one "
+            f"— they hold a location, the lookup just hasn't happened. `walk` "
+            f"picks up exactly those and leaves the rest alone: "
+            + names(unasked), width=76))
+    if refused:
+        print("\n" + textwrap.fill(
+            f"{len(refused)} have a location the router can't walk out of — it "
+            f"was asked and said there is no route, so `walk` will keep saying "
+            f"so. The pin has landed somewhere the pedestrian map doesn't "
+            f"connect to; `set <id> --address '…'` with a street address is the "
+            f"thing that moves it. " + names(refused), width=76))
     # Same predicate as the column, so the note can't turn up explaining a mark
     # that isn't in the table above it.
     if any(from_mark(r, all_in(r)[2]) for r in stays):
@@ -1466,8 +1550,18 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
             "`[maps] trust_claimed_walk = false` stops using them at all.",
             width=76))
     if rate:
-        print(f"{config.BASE_CURRENCY} converted at {rate} "
-              f"{config.QUOTE_CURRENCY}/{config.BASE_CURRENCY}.")
+        # Where the rate came from matters as much as what it is. One read off
+        # the captures is a fact about the pages you looked at; one typed into
+        # config.toml is a fact about whenever somebody last typed it.
+        pairs = sum(1 for r in stays if r.get("display_price")
+                    and r.get("native_price"))
+        source = (f"the median of {pairs} capture{'s' if pairs != 1 else ''} "
+                  f"holding both currencies" if pairs and rate == RATE
+                  else "as asked for on the command line" if rate != RATE
+                  else f"[currency] default_rate in {config.PATH.name}")
+        print(f"{config.BASE_CURRENCY} converted at "
+              f"{rate:.4f} {config.QUOTE_CURRENCY}/{config.BASE_CURRENCY} — "
+              f"{source}.")
 
     def with_verdict(verdict: str) -> list[tuple[dict, list]]:
         return [(r, gates[key_of(r)]) for r in stays
@@ -1673,7 +1767,13 @@ def cmd_walk(args) -> int:
     done = already = unlocatable = 0
     try:
         for rec in targets:
-            if rec.get("walk_minutes") and not args.again:
+            # A stay the router has already refused is skipped alongside the
+            # ones it answered. Both have been asked; asking again gets the same
+            # answer and spends somebody else's service on it. `--again` is
+            # still the way to retry, which is what you want after moving a
+            # destination — or after somebody maps the missing path.
+            if (rec.get("walk_minutes") or rec.get("walk_problems")) \
+                    and not args.again:
                 already += 1
                 continue
             origin = proximity.origin_of(rec)
@@ -1699,6 +1799,7 @@ def cmd_walk(args) -> int:
             # Merged, not replaced: a destination this run couldn't reach keeps
             # whatever an earlier run learned about it.
             rec["walk_minutes"] = {**(rec.get("walk_minutes") or {}), **minutes}
+            rec["walk_problems"] = problems or None
             done += 1
             print(f"  {rec.get('name') or '?'}: {proximity.describe(rec)}")
             for problem in problems:
@@ -2146,7 +2247,7 @@ def cmd_show(args) -> int:
     if not rec:
         print(f"No stay matching {args.id!r}", file=sys.stderr)
         return 1
-    print(json.dumps(rec, indent=2) if args.json else describe(rec, args.rate))
+    print(json.dumps(rec, indent=2) if args.json else describe(rec, args.rate or RATE))
     return 0
 
 
@@ -2181,7 +2282,7 @@ def cmd_url(args) -> int:
     # The configured rate rather than a flag of our own: `value` and `share`
     # divide by it, so the order has to be arrived at the same way `list`
     # arrives at it when you don't pass `--rate` either.
-    stays.sort(key=lambda r: SORTS[args.sort](r, config.DEFAULT_RATE))
+    stays.sort(key=lambda r: SORTS[args.sort](r, RATE))
     found = [r["url"] for r in stays if r.get("url")]
     if not found:
         print("No URLs stored in this database.", file=sys.stderr)
@@ -2287,13 +2388,22 @@ def parse_entry(line: str) -> tuple[str, object, float | None, str | None] | Non
     return None
 
 
-def apply_total(rec: dict, total: float, currency: str | None = None) -> None:
+def apply_total(rec: dict, total: float, currency: str | None = None,
+                tax_included: bool | None = None) -> None:
     """Record a total typed at the prompt, and let it win.
 
-    You typed it off the booking page, so it is the final number: quoted for
-    these dates and with tax already in it. It also clears any scraped native
-    price, which `all_in` would otherwise prefer — leaving that in place would
-    show you a number you didn't type and can't account for.
+    You typed it off the booking page, so it is a quote for these dates. It also
+    clears any scraped native price, which `all_in` would otherwise prefer —
+    leaving that in place would show you a number you didn't type and can't
+    account for.
+
+    What it does not assume any more is that tax is in it. That used to be
+    hard-coded true on the reasoning that a number off a booking page is the
+    final number, which is right about a checkout page and wrong about a listing
+    on a site the settings already describe as quoting pre-tax — and Booking.com
+    is exactly that site for anyone whose account displays in dollars. The
+    source's own `tax_included` is the better answer, and `--incl-tax` is still
+    there for the case where you really did read it off the last screen.
 
     The currency comes from the same place the number did — you — and only when
     you gave one. Where you didn't, the site's own currency stands: it is a
@@ -2301,11 +2411,30 @@ def apply_total(rec: dict, total: float, currency: str | None = None) -> None:
     price with no unit at all, and `list` says when a table has ended up holding
     two of them.
     """
+    unit = currency or rec.get("currency")
+    basis = (tax_included if tax_included is not None
+             else sources.site_for(rec).get("tax_included"))
+    # Before native gets cleared, because the pair is the whole value of it: a
+    # total you typed off a page showing dollars, against the pounds the same
+    # page encoded in its own link, is the exchange rate between them — measured
+    # rather than assumed.
+    #
+    # Only where the two are on the same tax basis, which is what `basis is
+    # False` is doing. A pre-tax figure over a pre-tax figure is a rate; a
+    # checkout total over a pre-tax room rate is a rate times 1.2, and it would
+    # not look wrong — it would look like a perfectly steady exchange rate that
+    # is twenty per cent out, on every row, for as long as nobody checked. So
+    # anything that isn't plainly both-pre-tax declines to be evidence.
+    native = rec.get("native_price")
+    if (native and rec.get("native_currency") and unit
+            and unit != rec["native_currency"] and basis is False
+            and 0.2 <= total / native <= 5):
+        rec["display_price"], rec["display_currency"] = total, unit
     rec["price"] = total
     if currency:
         rec["currency"] = currency
     rec["price_basis"] = "quoted"
-    rec["tax_included"] = True
+    rec["tax_included"] = basis
     rec["native_price"] = None
     rec["native_currency"] = None
     rec["status"] = sources.OK
@@ -2462,7 +2591,7 @@ def cmd_watch(args) -> int:
         pass
 
     # Run with no subcommand, argparse sets no --rate, so ask for it carefully.
-    rate = getattr(args, "rate", None) or config.DEFAULT_RATE
+    rate = getattr(args, "rate", None) or RATE
     print(f"lodgingbuddy — {tally(database.current())} in "
           f"{database.current()}. `help` for what this takes.")
 
@@ -2680,10 +2809,11 @@ def main() -> int:
     l.add_argument("--links", type=int, default=None, metavar="N",
                    help="how many links to print under the table, from the top "
                         f"down (default {config.LINKS}; 0 for none)")
-    l.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
+    l.add_argument("--rate", type=float, default=None,
                    metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                    help=f"convert {config.BASE_CURRENCY} prices to "
-                        f"{config.QUOTE_CURRENCY} at this rate")
+                        f"{config.QUOTE_CURRENCY} at this rate, instead "
+                        f"of the one the captures themselves imply")
     l.set_defaults(func=cmd_list)
 
     r = sub.add_parser("refresh", help="re-fetch prices for captured stays")
@@ -2728,7 +2858,7 @@ def main() -> int:
     sh = sub.add_parser("show", help="print one stay in full")
     sh.add_argument("id")
     sh.add_argument("--json", action="store_true", help="dump the raw record instead")
-    sh.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
+    sh.add_argument("--rate", type=float, default=None,
                     metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                     help=f"convert {config.BASE_CURRENCY} prices to "
                          f"{config.QUOTE_CURRENCY} at this rate")
@@ -2742,10 +2872,11 @@ def main() -> int:
     u.set_defaults(func=cmd_url)
 
     w = sub.add_parser("watch", help="hold a prompt open for pasted links")
-    w.add_argument("--rate", type=float, default=config.DEFAULT_RATE,
+    w.add_argument("--rate", type=float, default=None,
                    metavar=f"{config.QUOTE_CURRENCY}_PER_{config.BASE_CURRENCY}",
                    help=f"convert {config.BASE_CURRENCY} prices to "
-                        f"{config.QUOTE_CURRENCY} at this rate")
+                        f"{config.QUOTE_CURRENCY} at this rate, instead "
+                        f"of the one the captures themselves imply")
     w.set_defaults(func=cmd_watch)
 
     p.set_defaults(commands=set(sub.choices))

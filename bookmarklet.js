@@ -574,7 +574,8 @@
       // rather than being kept in step across two languages.
       amenities: null, beds: null, rooms_total: null, subscores: null,
       address: null, latitude: null, longitude: null, summary: null,
-      price: null, currency: "GBP", price_basis: null, price_candidates: []
+      price: null, currency: "GBP", price_basis: null, price_candidates: [],
+      display_price: null, display_currency: null
     };
     var host = ctx.host || "";
     var dom = ctx.dom || {};
@@ -889,6 +890,28 @@
           // estimate, which is what "indicative" has always meant here.
           rec.price_basis = "indicative";
           rec.tax_included = false;
+
+          // The same figure as the page was rendering it — which is the one
+          // place the exchange rate between them is written down, and beats
+          // both a number typed into config.toml and a call to some FX service.
+          // Booking will happily show an American dollars for a property that
+          // bills in pounds, and until this was captured the only way to read
+          // the table in dollars was to hard-code what a pound was worth.
+          //
+          // Both halves have to describe the same thing or the ratio is not a
+          // rate. One block only, so the block price and the cheapest price on
+          // screen are the same one room; the cheapest current price, because
+          // that is the plan sr_pri_blocks encodes; and no tax adjustment on
+          // either side, because Booking quotes this account pre-tax in both
+          // currencies at once. A ratio outside the band is a pairing that went
+          // wrong somewhere, and is dropped rather than averaged in.
+          var shown = current.length ? Math.min.apply(null, current) : null;
+          if (ids.length === 1 && shown && money.currency &&
+              money.currency !== rec.native_currency &&
+              shown / amount >= 0.2 && shown / amount <= 5) {
+            rec.display_price = shown;
+            rec.display_currency = money.currency;
+          }
         }
       }
     }

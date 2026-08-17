@@ -54,6 +54,14 @@ def blank_record() -> dict:
         # What the property itself charges, before the OTA's currency
         # conversion. Immune to FX markup, so it's the truest number we hold.
         "native_price": None, "native_currency": None,
+        # The same money as `native_price`, in the currency the page was
+        # rendering it in. Not a second price and never used as one — its whole
+        # job is to be a pair with the native figure, so the exchange rate the
+        # table converts at is read off the pages rather than typed into
+        # config.toml and left to go stale. Only recorded where the two
+        # currencies actually differ and where both figures are the same one
+        # room on the same tax basis; see `rate_from`.
+        "display_price": None, "display_currency": None,
         # "quoted"  = the site's price for these actual dates
         # "indicative" = a "from" / headline price that may not apply
         "price_basis": None,
@@ -119,6 +127,14 @@ def blank_record() -> dict:
         # Minutes on foot to each destination in config.toml. Filled by `walk`,
         # never by a capture — no listing page knows where you want to go.
         "walk_minutes": None,
+        # What the router said when it couldn't answer. Kept because "we never
+        # asked" and "we asked and there is no route from here" are different
+        # facts with different fixes, and an empty walk column looks identical
+        # either way. Five of the twenty Oban stays are the second kind: their
+        # coordinates land somewhere the pedestrian graph doesn't reach, and no
+        # amount of re-running `walk` will change that — only a better address,
+        # or somebody mapping the path.
+        "walk_problems": None,
         # Minutes on foot to whatever landmarks the write-up chose to mention,
         # keyed by its names for them rather than yours. Kept apart from the
         # measured figures on purpose: these are the property selling itself,
@@ -649,6 +665,25 @@ def awaze(url: str, site: dict) -> dict:
 # ──────────────────────────────── dispatch ─────────────────────────────────
 
 ADAPTERS = {"booking": booking, "sykes": sykes, "awaze": awaze}
+
+
+def site_for(rec: dict) -> dict:
+    """What config.toml says about the site a record came from.
+
+    By name first, because that is what a capture stamps on the record, then by
+    the URL's host for anything captured before the name settled. An empty dict
+    where nothing matches, so callers can `.get` without checking twice.
+    """
+    name = (rec.get("source") or "").lower()
+    host = urllib.parse.urlsplit(rec.get("url") or "").netloc.lower()
+    for site in config.SOURCES:
+        if name and name == str(site.get("name") or "").lower():
+            return site
+    for site in config.SOURCES:
+        domain = str(site.get("domain") or "").lower()
+        if domain and (domain in host or domain in name):
+            return site
+    return {}
 
 
 def capture(url: str) -> dict:

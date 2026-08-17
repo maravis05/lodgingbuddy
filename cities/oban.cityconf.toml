@@ -11,8 +11,8 @@
 # doing for anywhere the geocoder is vague about: a terminal, a trailhead, a
 # beach. Coordinates win where both are present.
 #
-# Two things about this list are worth knowing before you read a walk column
-# measured against it, and both came out of the twenty stays in examples/.
+# Three things about this list are worth knowing before you read a walk column
+# measured against it, and all three came out of the twenty stays in examples/.
 #
 # First: none of these three is a place the write-ups name, so `walk_claimed`
 # stays empty for every stay in Oban and the routed figure is never checked
@@ -21,16 +21,22 @@
 # answers to a landmark. Booking measures Oban from Corran Halls and from three
 # places miles out of it; see the landmark table below.
 #
-# Second: the ferry figure runs long, and it is the pin rather than the town.
-# The routed walk to it is a median 2.6 times the straight line, where a walk
-# through a small town runs about 1.2 to 1.4. Read off the six stays north of
-# the centre it is starker: they are 7 to 10 minutes from the town-centre pin
-# and 26 to 27 from the ferry, while the two pins are about 550 m apart and the
-# centre is between them and the stays. No route does that unless it doubles
-# back — which is what a pin on a pier deck rather than at the terminal door
-# makes the pedestrian network do, since it reaches the deck by one long spur
-# that every stay then pays for. Worth ten seconds with a map: move the pin to
-# the terminal entrance and the whole column drops by roughly that spur.
+# Second: every walk here routes long, and the pins are not why. Measured
+# against the straight line, the town-centre figure runs about 1.7x, the
+# distillery anywhere from 1.0x to 5.5x, and the ferry 2.7x to 3.7x — where a
+# walk through a small town ought to run 1.2 to 1.4. That is the shape of a
+# pedestrian network that is mostly roads: OSM has Oban's streets and not much
+# of what people actually walk on, so the router sends you round. The ferry pin
+# was the obvious suspect and has been ruled out: routing all twenty stays to
+# the terminal gate instead of the pier moved every one of them by one minute,
+# the wrong way. Treat the column as ordering the stays correctly and
+# overstating all of them.
+#
+# Third, and the reason five rows show no walk at all: the router refuses those
+# origins outright — "no walking route", to every destination, deterministically.
+# Their coordinates land somewhere the foot graph doesn't connect to. `walk`
+# records that now instead of leaving a hole, and `set <id> --address` is the
+# only thing that moves it.
 
 [[destination]]
 label = "Oban town centre"
@@ -40,9 +46,13 @@ weight = 0.6
 [[destination]]
 label = "Ferry terminal"
 # The postal address doesn't geocode — Nominatim has no "Railway Pier" in Oban
-# and returns nothing at all for it. The pin does.
-latitude = 56.4117438
-longitude = -5.4766190
+# and returns nothing at all for it. The pin does. This one is the terminal gate
+# rather than the pier: Nominatim calls it Gate 2, Town Centre, Oban PA34 4DB,
+# which is the thing you actually walk up to. It measures a minute longer than
+# the pier pin did, on every stay, which is worth knowing mainly for what it
+# rules out — see above.
+latitude = 56.412035
+longitude = -5.475698
 weight = 0.25
 
 [[destination]]

@@ -59,24 +59,22 @@ vat_rate = 0.20
 base = "GBP"
 quote = "USD"
 
-# Quote per unit of base: USD per GBP. Set, rather than left at 0, because the
-# tables are read by somebody who doesn't think in pounds, and a column you have
-# to convert in your head is a column you misread. `list --rate` still overrides
-# it for the day.
+# Nothing to set here, and that is deliberate. The rate is read off the pages:
+# a Booking.com capture of a foreign property holds the same money twice — the
+# pounds the property bills in, off its own link, and the dollars the page was
+# rendering that in — and `rate_from` takes the median ratio across the whole
+# database. So the tables convert at the rate that was actually on screen when
+# you captured, with no constant here to go stale and no FX service to call.
 #
-# It also does arithmetic now, not just display. A stay whose price got typed in
-# dollars off a page that quotes Americans in dollars is filed in dollars, and
-# before there was a rate to put it on one scale with the rest, the sort and the
-# Value column were dividing pounds by dollars and calling the answer an
-# ordering. With a rate here that stay is comparable; without one the table says
-# underneath that it isn't.
+# It does arithmetic as well as display. A stay filed in dollars used to be
+# ranked against stays filed in pounds by dividing one by the other; now
+# everything lands on one scale before Value or the sort touches it.
 #
-# 1.3548 is what Booking.com itself was using on 16 Aug 2026 — read off three
-# Oban stays where both the property's GBP figure and Booking's USD rendering of
-# it were captured, and identical to four decimal places across all three. It is
-# a snapshot, not a feed. Re-read it off any capture that holds both, or pass
-# the day's rate to `list --rate`.
-default_rate = 1.3548
+# This is only the fallback, for a database holding no such pair — a set of
+# captures all in the property's own currency, which needs no rate at all. Leave
+# it at 0 unless you have one of those and want it converted anyway. `list
+# --rate` overrides both, for the day you want today's number instead.
+default_rate = 0
 
 # Assumed for `set --native-price` when no --native-currency is given.
 native_default = "GBP"
