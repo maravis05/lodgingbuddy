@@ -233,13 +233,33 @@ max_price = 100000
 # night". Changing it relabels the column without reordering the table.
 price_unit = 25
 
-# Can we walk it, or are we driving? The one location question worth asking.
+# Can we walk it, or are we driving? The one location question worth asking,
+# and now the heaviest tier here — ahead of a bedroom each, ahead of what
+# previous guests thought. Location is the thing you cannot change once you
+# have arrived and the thing more money doesn't fix, and the numbers should say
+# so. Nothing else moved: raising one tier is what re-weights it against the
+# rest, and every other factor keeps the points it had.
+#
+# Two things worth knowing before nudging these again.
+#
+# The steps are a cliff, not a slope. At these numbers the boundary at 10 is
+# worth 13 points, so a minute either side of it decides more than a whole
+# bathroom does. That is fine where candidates straddle the boundaries and
+# silly where they cluster on one side of one — Oban's twenty ran 8.0 to 16.0
+# minutes, which the 10 cuts straight through. A city whose geography doesn't
+# suit these can restate the list in its own cityconf.toml, which replaces this
+# one outright.
+#
+# And a stay with no walk figure at all scores zero here, exactly like one two
+# hours out. That is a data gap wearing the costume of a verdict, and every
+# point added to this tier widens it. `list` names them under the table, and
+# `set <id> --address '…'` is what fixes a pin the router can't walk out of.
 [scoring.tiers.walk_minutes]
 direction = "lower"
 steps = [
-  { max = 10, points = 25 },   # out the door and you're there
-  { max = 20, points = 15 },   # a walk, but nobody complains
-  { max = 35, points = 6 },    # you'd do it once, in good weather
+  { max = 10, points = 35 },   # out the door and you're there
+  { max = 20, points = 22 },   # a walk, but nobody complains
+  { max = 35, points = 9 },    # you'd do it once, in good weather
 ]
 
 # What previous guests said, as a percentage of full marks.

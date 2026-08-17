@@ -396,7 +396,19 @@ def migrate() -> list[str]:
     would still be a name. Anything else is left where it is and said out loud.
     """
     jobs = [(p, DB_SUFFIX) for p in _old(STORE_DIR, ".json")]
-    jobs += [(p, DB_CONF_SUFFIX) for p in _old(STORE_DIR, ".toml")]
+    # A .toml in the store folder is a trip's settings only where there is a
+    # trip for it to be the settings of — a database of that name, either
+    # already renamed or about to be in this same run. Nothing else about the
+    # name says which kind of file it is, and the one guard here before was
+    # "not the config we happen to be reading", which stops holding the moment
+    # LODGINGBUDDY_CONFIG points elsewhere: config.toml then sits in the store
+    # folder unprotected and gets renamed to config.dbconf.toml, after which
+    # the next run finds no config at all and quietly scores everything on the
+    # built-in defaults. Which is how this was found.
+    trips = {bare(p.name) for p in STORE_DIR.glob("*" + DB_SUFFIX)}
+    trips |= {bare(p.name) for p, _ in jobs}
+    jobs += [(p, DB_CONF_SUFFIX) for p in _old(STORE_DIR, ".toml")
+             if bare(p.name) in trips]
     # With one folder for both there is no telling a city from a trip by name,
     # which is the whole reason for the new ones — so say so and touch nothing.
     together = CITIES_DIR.resolve() == STORE_DIR.resolve()
