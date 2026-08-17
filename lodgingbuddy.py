@@ -259,7 +259,32 @@ def from_mark(rec: dict, tax: str) -> str:
     return "~" if rec.get("price_basis") == "indicative" and tax != "computed" else ""
 
 
+def in_base(amount: float | None, cur: str) -> tuple[float | None, str]:
+    """One amount in the base currency, where there is a rate to get it there.
+
+    `converted` goes the other way, base into the quote currency, and is for
+    display. This one is for the arithmetic, and the difference matters: Value
+    divides points by cost and the sort orders on cost, and neither means
+    anything across two units. Until this existed, a stay held in dollars was
+    ranked against stays held in pounds by dividing one by the other — which is
+    exactly what three of the twenty Oban stays did, each of them a pound figure
+    someone had typed off a page that quotes Americans in dollars.
+
+    A currency there is no rate for is left alone rather than guessed at, and
+    the footnote under the table is what says so.
+    """
+    if amount and cur == config.QUOTE_CURRENCY and config.DEFAULT_RATE:
+        return amount / config.DEFAULT_RATE, config.BASE_CURRENCY
+    return amount, cur
+
+
 def converted(amount: float | None, cur: str, rate: float | None) -> tuple[float | None, str]:
+    """One amount in the currency the table is being read in.
+
+    Normalises to base first, so a stay already held in the quote currency
+    isn't left as the one row the rate never touched.
+    """
+    amount, cur = in_base(amount, cur)
     if amount and rate and cur == config.BASE_CURRENCY:
         return amount * rate, config.QUOTE_CURRENCY
     return amount, cur
@@ -473,6 +498,36 @@ def cmd_set(args) -> int:
     if not rec:
         print(f"No stay matching {args.id!r}. Try `list`.", file=sys.stderr)
         return 1
+    # Before anything is set, so `--drop-price --native-price N` reads left to
+    # right: forget mine, here is the right one.
+    #
+    # A typed total outranks a captured one everywhere — that is the whole point
+    # of typing it — and until this existed there was no way back. Which mattered
+    # more than it sounds: `paste` used to announce "no price on the page" over a
+    # perfectly good captured figure, and the totals typed in answer to that were
+    # off a page quoting dollars for a property that bills in pounds, so they
+    # were 20% short and in the wrong unit, and re-capturing wouldn't shift them
+    # because a typed price is exactly what re-capturing is careful not to break.
+    if getattr(args, "drop_price", False):
+        rec["price"] = None
+        rec["price_basis"] = None
+        rec["tax_included"] = None
+        # And put back what the capture had, where the link still carries it.
+        # Typing a total clears the captured figure, so dropping the typed one
+        # would otherwise leave the stay with no price at all and nothing to
+        # re-capture from short of opening the page again.
+        if not rec.get("native_price") and rec.get("source") == "booking.com":
+            amount, blocks = sources.booking_blocks(rec.get("url") or "")
+            if amount is not None:
+                rec["native_price"] = amount
+                # Deliberately not rec["currency"], which on Booking is the
+                # currency the page was displaying — the thing that started all
+                # this. What the property bills in is what native means.
+                rec["native_currency"] = config.NATIVE_CURRENCY
+                rec["price_basis"] = "indicative"
+                rec["tax_included"] = False
+                if blocks > 1:
+                    rec["rooms"] = blocks
     for field in ("price", "nights", "adults", "rooms", "note", "currency",
                   "score", "native_price", "native_currency", "offer",
                   "shares", "bedrooms", "bathrooms", "sleeps",
@@ -512,6 +567,9 @@ def cmd_set(args) -> int:
     if amount:
         vat = rec.get("vat_rate") or config.VAT_RATE
         tail = f"  (VAT added at {vat:.0%})" if estimated == "added" else ""
+        # In the unit the table is read in, so a figure checked here against a
+        # row up there is the same figure.
+        amount, cur = converted(amount, cur, config.DEFAULT_RATE)
         print(f"  all-in {amount:,.2f} {cur}{tail}")
     mark = scored(rec)
     if mark.points:
@@ -525,7 +583,12 @@ SORTS = {
     # The old name for the same idea, kept so muscle memory and an unedited
     # config.toml both still work.
     "pppn": lambda r, rate: (per_share_night(r, rate) is None, per_share_night(r, rate) or 0),
-    "price": lambda r, rate: (r.get("price") is None, r.get("price") or 0),
+    # Through all_in, not off rec["price"], which a Booking capture never fills
+    # — it files its figure under native_price. Sorting on the raw field put
+    # every Booking stay in the "no price" bucket and then left them in capture
+    # order, which looks exactly like a sort.
+    "price": lambda r, rate: (all_in(r)[0] is None,
+                              converted(*all_in(r)[:2], rate)[0] or 0),
     # On the normalised percentage, never the raw number. Sorting those put a
     # 4.8-out-of-5 below a 9.0-out-of-10.
     "score": lambda r, rate: (scoring.guest_score(r) is None, -(scoring.guest_score(r) or 0)),
@@ -1125,18 +1188,25 @@ def cmd_list(args) -> int:
     # dropping `all_in` from `columns` doesn't also drop the note explaining
     # the 20% that is still inside every per-share figure below it.
     seen_tax = {tax for r in stays for amount, _, tax in [all_in(r)] if amount}
-    # On what's stored, not on what the column ends up printing: `--rate` puts
-    # one unit in the table while leaving Value dividing by the other, so a
-    # table that has gone mixed stays mixed however it's displayed.
+    # After normalising to base, not on what is stored. A stay stored in dollars
+    # against a table of pounds used to be a genuinely mixed table — the sort
+    # and Value divided one unit by the other — and that is what this set is
+    # here to complain about. With a rate configured it isn't mixed any more,
+    # it is one unit written down twice, and a footnote saying otherwise sends
+    # you off to fix something that is already right. What still belongs in the
+    # set is a currency there is no rate for, which is still incomparable.
     seen_cur = {cur for r in stays
-                for amount, cur, _ in [all_in(r)] if amount and cur}
+                for amount, cur, _ in [all_in(r)]
+                for amount, cur in [in_base(amount, cur)] if amount and cur}
 
     # The currency and the tax basis the header can carry are whichever most of
     # the table is in. A mark every row wears distinguishes no row from any
     # other — it is thirty characters spent saying "as usual" — so the common
     # case is stated once underneath and only the exceptions are marked.
     common_cur = _commonest(cur for r in stays
-                            for amount, cur, _ in [all_in(r)] if amount and cur)
+                            for amount, cur, _ in [all_in(r)]
+                            for amount, cur in [in_base(amount, cur)]
+                            if amount and cur)
     common_tax = _commonest(tax for r in stays
                             for amount, _, tax in [all_in(r)] if amount)
     shown_cur = converted(1, common_cur, rate)[1] if common_cur else ""
@@ -1333,12 +1403,14 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
     # go and look up.
     if len(seen_cur) > 1:
         print("\n" + textwrap.fill(
-            f"{' and '.join(sorted(seen_cur))} in one table — the share "
-            f"column, the sort and Value are all arithmetic across both, so "
-            f"the rows above are ordered against each other in units that "
-            f"don't match. `set <id> --currency {config.BASE_CURRENCY}` files "
-            f"a price under what it's actually in; `--rate` only converts the "
-            f"column for display, and doesn't reach Value.", width=76))
+            f"{' and '.join(sorted(seen_cur))} in one table, and no rate "
+            f"between them — the share column, the sort and Value are all "
+            f"arithmetic across both, so the rows above are ordered against "
+            f"each other in units that don't match. Either file the price "
+            f"under what it is really in, with `set <id> --currency "
+            f"{config.BASE_CURRENCY}`, or give [currency] a `default_rate` so "
+            f"the table can put both on one scale before it sorts them.",
+            width=76))
     # Same predicate as the column, so the note can't turn up explaining a mark
     # that isn't in the table above it.
     if any(from_mark(r, all_in(r)[2]) for r in stays):
@@ -1642,12 +1714,33 @@ def cmd_paste(args) -> int:
     print(f"{rec['name'] or '?'}  [{rec['source']}]")
     if walk := proximity.describe(rec):
         print(f"  {walk}")
-    if rec["price"]:
-        print(f"  {rec['price']:g} {rec['currency'] or ''}".rstrip())
-        if rec.get("price_basis") == "indicative":
-            print('  that is a "from" price, not a quote for these dates — '
-                  "click through to book and set the real total:")
-            print(f"    {RUN} set {rec['code']} --price <total> --incl-tax")
+    # Through all_in, not off rec["price"]. Booking.com's capture files its
+    # figure in native_price — the property's own currency, off the URL — and
+    # leaves `price` null, so a test on `price` alone calls every Booking
+    # capture priceless and says so in as many words. Which is a lie that gets
+    # believed: told there was no price, you go to the page and type the number
+    # on it, and Booking shows a US-currency account the pre-VAT total, so a
+    # correct £258.70 becomes a $350.50 that is 20% short and in the wrong unit.
+    # Three of the twenty Oban stays were captured that way. The predicate the
+    # table uses is the predicate this line has to use.
+    amount, cur, tax = all_in(rec)
+    if amount:
+        print(f"  {amount:,.2f} {cur or ''}".rstrip()
+              + {"inclusive": " all-in",
+                 "computed": " all-in, on the rates and fees the page stated",
+                 "added": f" all-in, with {config.VAT_RATE:.0%} VAT added here "
+                          f"because the site quoted a pre-tax price",
+                 "unknown": " as quoted — nobody said whether tax is in it",
+                 }.get(tax, ""))
+        if rec.get("price_basis") == "indicative" and tax == "added":
+            # Naming the unit in the suggested command on purpose. The figure
+            # above is the property's own currency; the total on screen may not
+            # be, and a typed number filed under the wrong one is invisible.
+            print("  arithmetic rather than a checkout quote. If the booking "
+                  f"page's own total differs, that one wins — in whatever "
+                  f"currency it is quoting you:")
+            print(f"    {RUN} set {rec['code']} --price <total> --incl-tax "
+                  f"--currency {cur}")
     elif candidates:
         # Several plausible amounts on the page and no way to tell which is the
         # total — offering the list beats guessing wrong.
@@ -1684,7 +1777,10 @@ def record_from_payload(incoming: dict) -> tuple[dict | None, list, str | None]:
                                   "specific listing and click again.")
 
     rec["captured_at"] = dt.datetime.now().isoformat(timespec="seconds")
-    rec["status"] = sources.OK if rec["price"] else sources.NEEDS_PRICE
+    # Same predicate as the table's, for the same reason as the line in
+    # cmd_paste: a Booking capture holds its figure in native_price, and asking
+    # only about `price` files a perfectly priced stay as needing one.
+    rec["status"] = sources.OK if all_in(rec)[0] else sources.NEEDS_PRICE
     return rec, candidates, None
 
 
@@ -1961,11 +2057,14 @@ def describe(rec: dict, rate: float | None = None) -> str:
     if mark.points or mark.unknown:
         row("Points", f"{mark.points:g}   {mark.summary()}")
     if mark.value is not None:
-        # Always shown against the unconverted figure, because that is what it
-        # was computed from — quoting it against a converted one would be
-        # arithmetic that doesn't check out.
+        # Always shown against the figure it was computed from — the base
+        # currency, whatever the rest of this readout is in — because quoting it
+        # against a converted one would be arithmetic that doesn't check out.
+        # Value has to sit on one unit or it isn't comparable down a column, and
+        # that unit can't be the display one or asking to read the table in
+        # dollars would silently re-rank it.
         base = per_share_night(rec)
-        _, base_cur, _ = all_in(rec)
+        base_cur = in_base(*all_in(rec)[:2])[1]
         row("Value", f"{mark.value:g}   = {mark.points:g} points / "
                      f"({base:,.0f} {base_cur} per {label} a night / "
                      f"{config.PRICE_UNIT})")
@@ -2505,6 +2604,9 @@ def main() -> int:
                    help="the quoted price already includes VAT")
     s.add_argument("--excl-tax", action="store_true", dest="excl_tax",
                    help="the quoted price excludes VAT; add it when comparing")
+    s.add_argument("--drop-price", action="store_true", dest="drop_price",
+                   help="forget a price you typed, and let the site's own "
+                        "figure stand again")
     s.set_defaults(func=cmd_set)
 
     l = sub.add_parser("list", help="show everything side by side")

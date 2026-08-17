@@ -54,11 +54,30 @@ vat_rate = 0.20
 
 
 [currency]
-# Prices are held in `base`. `list --rate` converts them to `quote` for display.
+# Prices are held in `base` — the currency the property itself bills in, which
+# for these is pounds whatever Booking.com is showing you — and read in `quote`.
 base = "GBP"
 quote = "USD"
-# Default for `list --rate`; 0 means don't convert unless asked on the day.
-default_rate = 0
+
+# Quote per unit of base: USD per GBP. Set, rather than left at 0, because the
+# tables are read by somebody who doesn't think in pounds, and a column you have
+# to convert in your head is a column you misread. `list --rate` still overrides
+# it for the day.
+#
+# It also does arithmetic now, not just display. A stay whose price got typed in
+# dollars off a page that quotes Americans in dollars is filed in dollars, and
+# before there was a rate to put it on one scale with the rest, the sort and the
+# Value column were dividing pounds by dollars and calling the answer an
+# ordering. With a rate here that stay is comparable; without one the table says
+# underneath that it isn't.
+#
+# 1.3548 is what Booking.com itself was using on 16 Aug 2026 — read off three
+# Oban stays where both the property's GBP figure and Booking's USD rendering of
+# it were captured, and identical to four decimal places across all three. It is
+# a snapshot, not a feed. Re-read it off any capture that holds both, or pass
+# the day's rate to `list --rate`.
+default_rate = 1.3548
+
 # Assumed for `set --native-price` when no --native-currency is given.
 native_default = "GBP"
 

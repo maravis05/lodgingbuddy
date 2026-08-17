@@ -384,20 +384,64 @@ def booking(url: str, site: dict) -> dict:
     rec["children"] = one("group_children", int, 0)
     rec["rooms"] = one("no_rooms", int)
 
-    # Booking.com encodes the selected room block's price on the end of
-    # sr_pri_blocks as minor units: ..._5_0_0__29363 means 293.63. Present on
-    # links copied from a search result, absent on a bare property URL.
-    if m := re.search(r"sr_pri_blocks=[^&]*?__(\d+)", parts.query):
-        amount = int(m.group(1)) / 100
-        if config.BOOKING_MIN_PRICE <= amount <= config.BOOKING_MAX_PRICE:
-            rec["price"] = amount
-            # Checked against two real bookings, this sits 19-23% below the
-            # checkout total — near the pre-tax room rate. Useful as a
-            # ballpark, misleading if presented as the price.
-            rec["price_basis"] = "indicative"
+    amount, blocks = booking_blocks(url)
+    if amount is not None:
+        # Filed as the property's own price, which is what it is, and which is
+        # also where the bookmarklet files it. Two readers of one URL parameter
+        # putting the answer in two different fields is how a stay ends up
+        # priced or not depending on which one saw it.
+        rec["native_price"] = amount
+        rec["native_currency"] = rec.get("currency") or config.NATIVE_CURRENCY
+        # Checked against two real bookings, this sits 19-23% below the
+        # checkout total — near the pre-tax room rate. Useful as a
+        # ballpark, misleading if presented as the price.
+        rec["price_basis"] = "indicative"
+        rec["tax_included"] = False
+        if blocks > 1:
+            # How many units the figure buys, which beats no_rooms: that is the
+            # search's question, this is what the number in hand covers.
+            rec["rooms"] = blocks
 
-    rec["status"] = OK if rec["price"] else NEEDS_PRICE
+    rec["status"] = OK if (rec["price"] or rec["native_price"]) else NEEDS_PRICE
     return rec
+
+
+def booking_blocks(url: str) -> tuple[float | None, int]:
+    """What a Booking search result priced, off sr_pri_blocks, and in how many units.
+
+    Booking encodes each selected block's price as minor units on the end of its
+    id — ..._5_0_0__29363 is 293.63 — and the parameter holds every block that
+    one search card was priced on. So the total is their sum: a hotel room taken
+    twice for a party of three is listed twice, and reading only the first files
+    a two-room booking at one room's price.
+
+    Which is what this did until it was made to agree with the bookmarklet,
+    where the summing has always been right. The same URL got two different
+    prices depending on which of the two parsed it, and the disagreement was
+    silent and always in the same direction.
+
+    Present on links copied from a search result, absent on a bare property URL
+    — which is the whole reason a Booking stay can arrive with no price at all.
+
+    The figure is in the property's own currency, not the one the page is
+    displaying to you. Returns (total, block count), or (None, 0).
+    """
+    found = re.search(r"sr_pri_blocks=([^&]*)", url)
+    if not found:
+        return None, 0
+    minor, blocks = 0, 0
+    for block in urllib.parse.unquote(found.group(1)).split(","):
+        if m := re.search(r"__(\d+)$", block):
+            minor += int(m.group(1))
+            blocks += 1
+    if not blocks:
+        return None, 0
+    # Summed in minor units and divided once, so two rooms at 296.66 come to
+    # 593.32 rather than the 593.3199999999999 that adding the pounds gives.
+    amount = minor / 100
+    if not config.BOOKING_MIN_PRICE <= amount <= config.BOOKING_MAX_PRICE:
+        return None, 0
+    return amount, blocks
 
 
 # ────────────────────────────── Sykes Cottages ─────────────────────────────
