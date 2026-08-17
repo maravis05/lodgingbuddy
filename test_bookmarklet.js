@@ -377,14 +377,19 @@ const BLOCK_CASES = [
   },
   {
     // Two different rooms still add up — the sum is the sum whatever is in it.
-    // Capacity doesn't: the page was narrowed to the cheaper unit long before
-    // this, so doubling its "Max. people" would be describing a room nobody
-    // read. It stays the one figure we actually have.
-    name: "two different blocks add up, but their capacity isn't guessed",
+    // Capacity doesn't, and can't: the page was narrowed to the cheaper unit
+    // long before this, so doubling its "Max. people" would describe a room
+    // nobody read. This used to keep the one figure it had, on the grounds that
+    // it was at least a figure — but a booking of two rooms filed as sleeping
+    // two is not a partial answer, it is a wrong one, and scoring subtracts
+    // heads from it and marks the stay cramped. Five of the twenty Oban stays
+    // are two-room guesthouse bookings that lost a point that way. Null says
+    // the true thing.
+    name: "two different blocks add up, and their capacity is left unknown",
     url: BASE + "&no_rooms=2&sr_pri_blocks=" +
          "3686523_95159595_2_2_0__29666%2C3686523_95159599_4_2_0__43600",
     rooms: HOTEL_ROOMS,
-    want: { native_price: 732.66, rooms: 2, sleeps: 2 }
+    want: { native_price: 732.66, rooms: 2, sleeps: null }
   },
   {
     // One block, and a unit that holds all three: the search asked for two

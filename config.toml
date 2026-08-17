@@ -371,7 +371,9 @@ transport_nearby = 2
 # luggage_storage, laundry_service, restaurant_on_site, gym, sauna, bike_parking,
 # paid_parking, microwave, coffee_machine, kettle, dining_area, city_view,
 # garden_view, streaming, hairdryer, toiletries, wardrobe, work_desk, licensed.
-# And the kinds: apartment, aparthotel, hotel, guesthouse.
+# And the kinds: apartment, aparthotel, hotel, guesthouse, house — that last one
+# being anything let whole and not a flat, which is what Booking.com files under
+# "holiday home" and what both cottage sites sell exclusively.
 
 
 # ── Must-haves ────────────────────────────────────────────────────────────

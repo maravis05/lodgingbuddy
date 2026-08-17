@@ -865,7 +865,20 @@
           // was narrowed to the priced unit long before this.
           var same = true;
           for (var si = 1; si < ids.length; si++) if (ids[si] !== ids[0]) same = false;
-          if (ids.length > 1 && same && rec.sleeps) rec.sleeps *= ids.length;
+          if (ids.length > 1 && same && rec.sleeps) {
+            rec.sleeps *= ids.length;
+          } else if (ids.length > 1 && rec.sleeps) {
+            // Different rooms, so one room's capacity is not the booking's, and
+            // reading each one's own line is what the page was narrowed away
+            // from long before this. What was here before left the one figure
+            // standing, which is worse than having none: a two-room guesthouse
+            // booking read "sleeps 2" against a party of three, and scoring
+            // takes sleeps minus heads, so every one of them was docked a point
+            // for being cramped in a booking with a bed spare. Five of the
+            // twenty Oban stays are exactly that. Null says we don't know,
+            // which is the true thing, and `set --sleeps` is one word.
+            rec.sleeps = null;
+          }
           // The property's country, off the URL, says which currency that is;
           // a fee quoted with a symbol says so outright and is believed first.
           rec.native_currency =

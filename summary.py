@@ -182,6 +182,14 @@ def _shapes(lm: str) -> list[tuple[str, str]]:
          rf"{_QUAL}{_DIST}\s+(?:from|of)?\s*(?P<lm>{lm})"),
         ("landmark within distance",
          rf"(?P<lm>{lm})[^.]{{0,30}}?\s+(?P<q>within|less\s+than)\s+(?:a\s+)?{_DIST}"),
+        # "Nearby attractions include Kilmartin House Museum at 29 mi" — the
+        # form Booking falls into when a place is the last item in a list, and
+        # the one shape its Oban write-ups use that the six above don't read.
+        # Two of the twenty said only this, and said it about a landmark
+        # nineteen of them named, so the gap looked like a parsing gap in a
+        # single record rather than a missing rule.
+        ("landmark at distance",
+         rf"(?P<lm>{lm})\s+at\s+{_QUAL}(?:a\s+)?{_DIST}"),
     ]
 
 
@@ -281,12 +289,38 @@ _HAS_BATH = re.compile(r"private bathroom|a bathroom with|bathroom with a", re.I
 
 # Ordered: the first that matches wins, because a hotel's write-up says
 # "apartment" about its rooms and an aparthotel's says both.
+#
+# `house` is last but one, and that placement is the whole of it. Booking files
+# every whole-property let under "holiday home" whether it is a cottage, a
+# townhouse or a garden flat, so the phrase on its own decides nothing — it has
+# to lose to a write-up that says "apartment" outright, and only answer for the
+# ones that say nothing else. Strathisla calls itself both and is a flat;
+# Feochan View says only "Charming Holiday Home" and was coming out as no kind
+# at all, along with three of the thirty in Edinburgh. It matters more than it
+# looks, because it is the entire stock of the two cottage sites this tool has
+# adapters for: a vocabulary with no word for a cottage had nothing to say about
+# most of what it was built to read.
+#
+# "Each room" is last, and is Booking's house style for facilities stated per
+# room rather than per property — which is a thing said about a guesthouse and a
+# hotel and never about a flat you have to yourself. It sits below both of those
+# so it only ever answers for a place that named itself neither: on the fifty
+# stays here it fires three times, on the three guesthouses, one of which
+# nothing else caught.
 _KIND = [
     ("aparthotel", r"\bapart-?hotel\b|\bserviced\s+apartments?\b"),
-    ("guesthouse", r"\bguest\s*house\b|\bGeorgian\s+townhouse\b"),
+    ("guesthouse", r"\bguest\s*house\b|\bGeorgian\s+townhouse\b"
+                   r"|\bbed\s+and\s+breakfast\b|\bB\s*&\s*B\b"),
     ("hotel", r"\bthis\s+hotel\b|\bthe\s+hotel\b|hotel[’']s\b"
-              r"|\bcountry\s+hotel\b|\bHoliday\s+Inn\b"),
+              r"|\bcountry\s+hotel\b|\bHoliday\s+Inn\b"
+              # "today it operates as a 4-star hotel" — the one hotel in Oban
+              # with a write-up a person wrote, and the four patterns above
+              # between them had nothing for it.
+              r"|\b\d[\s-]?star\s+hotel\b"),
     ("apartment", r"\bapartments?\b|\bflat\b|\bself-catering\b"),
+    ("house", r"\bholiday\s+(?:home|cottage|let|house)\b|\bcottages?\b"
+              r"|\btownhouse\b|\bvilla\b"),
+    ("guesthouse", r"\bEach\s+room\b"),
 ]
 _KIND = [(n, re.compile(p, re.I)) for n, p in _KIND]
 
@@ -429,7 +463,7 @@ NEARBY = frozenset(_NEARBY)
 
 # What a property is. Also a trait as far as config.toml is concerned, but it is
 # one answer out of four rather than a flag, so it gets its own field.
-KINDS = ("apartment", "aparthotel", "hotel", "guesthouse")
+KINDS = ("apartment", "aparthotel", "hotel", "guesthouse", "house")
 
 # Sentences that describe the region rather than the property. Dropped before
 # anything else looks at the text.
@@ -463,6 +497,9 @@ class Reading:
     """Everything one summary claims, with nothing merged in."""
 
     kind: str | None = None
+    # What the write-up calls the place, where the record is going on a URL slug.
+    # Reported, never applied — see `_called`.
+    called: str | None = None
     bedrooms: int | None = None
     bathrooms: int | None = None
     # "a private bathroom" is one bathroom being described, not a count of them.
@@ -606,9 +643,74 @@ def read(record: dict) -> Reading:
     out.traits = {k for k, p in _TRAITS.items() if p.search(text)}
     out.nearby = {k for k, p in _NEARBY.items() if p.search(text)}
 
+    out.called = _called(text, record)
     out.claims = _claims(_mask_name(text, record.get("name")))
     _doubt(out.claims, record)
     return out
+
+
+# What a machine-written write-up opens with: the property's name, the town,
+# and a verb. "Campbells Loft in Oban offers a spacious apartment", where the
+# record's own name — taken off the URL, because that is all Booking gives a
+# capture — is "Bright 2 Bedroom Flat With Parking In Oban".
+#
+# The two optional openers earn their place. Booking's last paragraph is "Overall,
+# the Muthu Queens Hotel in Oban offers…", and without them the name comes out
+# with the summing-up still attached to the front of it.
+_CALLED = re.compile(
+    r"(?:^|[:.]\s+|\n)(?:Overall,?\s+)?(?:[Tt]he\s+)?(?P<n>[A-Z0-9][^.:\n]{2,48}?)"
+    r"\s+in\s+[A-Z][\w'’-]+(?:[\s-][A-Z][\w'’-]+)?"
+    r"\s+(?:offers|is|provides|stands|features|welcomes)\b")
+
+# How much of the name the write-up gives has to already be in the name on the
+# record before saying so is just noise. Four words out of five: "The Newly
+# refurbished town center apartment" against "Newly Refurbished Town Centre
+# Apartment" is the same name spelled by an American, and nobody needs telling.
+_SAME_NAME = 0.7
+
+
+def _called(text: str, record: dict) -> str | None:
+    """The name the write-up gives, where the record hasn't got one of its own.
+
+    Only offered against a name that is nothing but the URL slug title-cased,
+    which is what a Booking.com capture starts with and is why half of them read
+    like search terms — "New Central Modern Bright G F Flat Free Wifi", which
+    the write-up calls Flat 12A. Somewhere the slug isn't all we have, the slug
+    isn't the problem.
+
+    Never applied, only reported. The write-up's name is better about as often
+    as it is worse — it has "Campbells Loft" and "Muthu Queens Hotel", and it
+    also has "Raniven" for a guest house whose slug says Raniven Guest House —
+    and which of two names is the better one is not a judgement to make out of
+    sight of the person reading the table.
+    """
+    slug = (record.get("code") or "").replace("-", " ").strip()
+    held = (record.get("name") or "").strip()
+    if not slug or not held or _bare_words(held) != _bare_words(slug):
+        return None
+    m = _CALLED.search(text)
+    if not m:
+        return None
+    said = re.sub(r"\s+", " ", m.group("n")).strip(" ,;")
+    words = _bare_words(said)
+    if not words or len(words) > 8:
+        return None
+    shared = len(words & _bare_words(held)) / len(words)
+    return None if shared >= _SAME_NAME else said
+
+
+# Booking writes the same word both ways within one property's page, so two
+# names differing only by which side of the Atlantic spelled them are one name.
+# Same complaint the Edinburgh landmark table makes about Centre and Theatre.
+_SPELLING = {"center": "centre", "centre": "centre", "cozy": "cosy",
+             "theater": "theatre", "harbor": "harbour", "colour": "color"}
+
+
+def _bare_words(text: str) -> set[str]:
+    """A name as a bag of its own letters and digits, for comparing two of them."""
+    return {_SPELLING.get(w, w)
+            for w in re.sub(r"[^\w\s]", " ", text.lower()).split()
+            if w and w != "the"}
 
 
 def _claims(text: str) -> list[Claim]:
@@ -618,7 +720,15 @@ def _claims(text: str) -> list[Claim]:
         for m in pattern.finditer(text):
             landmark = _canonical(m.group("lm"))
             phrase = re.sub(r"\s+", " ", m.group("d").strip())
-            key = (landmark, m.start("d"))
+            # Keyed on where the distance ends, not where it starts. Two shapes
+            # reading one sentence disagree about the front of the phrase and
+            # never about the back: "Corran Halls is a 7-minute walk away"
+            # yields "7-minute walk" from one template and "a 7-minute walk"
+            # from another, two characters apart, and a start-keyed set lets
+            # both through as separate claims. Which is invisible in
+            # walk_minutes, where the landmark is the key — and not invisible in
+            # `locate`, where it quietly counts that stay twice.
+            key = (landmark, m.end("d"))
             if key in seen:
                 continue
             seen.add(key)
@@ -709,12 +819,28 @@ def locate(records: list[dict],
     and fitting them puts the airport four kilometres into a field.
     """
     seen: dict[str, list[tuple[float, float, float]]] = {}
+    # How many claims each landmark had before the distance cut, so the cut can
+    # be judged as well as applied. Losing a few of a landmark's claims is
+    # nothing — one stay out in the country quotes the concert hall in miles
+    # like everything else — but losing most of them leaves a biased sample:
+    # every claim under the cut and none over it, which is the near edge of a
+    # circle rather than the circle. Fit that and least squares will hand back a
+    # confident point, because it always does.
+    #
+    # Oban is where this showed. Dunstaffnage Castle is quoted at 3, 3.1, 3.7
+    # and 7.5 miles by nineteen stays; the cut kept the four shortest, which
+    # cleared `minimum`, and the castle came out 7.7 km from the real one and
+    # just as sure of itself as the landmark that fitted properly.
+    offered: dict[str, int] = {}
     for record in records:
         lat, lon = record.get("latitude"), record.get("longitude")
         if lat is None or lon is None:
             continue
         for c in read(record).claims:
-            if c.upper_bound or c.unit == "drive" or c.metres > 5000:
+            if c.upper_bound or c.unit == "drive":
+                continue
+            offered[c.landmark] = offered.get(c.landmark, 0) + 1
+            if c.metres > FITTABLE:
                 continue
             seen.setdefault(c.landmark, []).append((lat, lon, c.metres))
 
@@ -722,7 +848,8 @@ def locate(records: list[dict],
     # coordinate you gave is better than one worked out from the sentences being
     # judged against it, and it holds on the first stay rather than the fourth.
     usable = {n: p for n, p in seen.items()
-              if len(p) >= minimum and n not in PLACES}
+              if len(p) >= minimum and n not in PLACES
+              and len(p) >= REPRESENTATIVE * offered[n] and _crossable(p)}
     if not usable:
         return dict(PLACES), DETOUR
 
@@ -740,6 +867,52 @@ def locate(records: list[dict],
 def _spread(values: list[float]) -> float:
     ordered = sorted(v for v in values if v is not None)
     return ordered[len(ordered) // 2] if ordered else float("inf")
+
+
+# Past this, a quoted distance stops being something a position can be fitted
+# from. Not because the number is wrong — "29 mi to Kilmartin" is true and
+# useful — but because it is a drive quoted in miles, and driving distance is
+# road, not radius. Under it, claims are walks and the two are close enough.
+FITTABLE = 5000
+
+# How much of a landmark's evidence has to survive that cut before what's left
+# is worth fitting. Half, which is loose: it lets through a landmark whose
+# claims are mostly walks with a couple of country stays quoting miles, and
+# stops one whose claims are mostly miles with a handful of near ones. The
+# second is the failure — a sample selected for being short, fitted as though
+# it were a sample.
+REPRESENTATIVE = 0.5
+
+# How wide the stays quoting a landmark have to be spread, against how far away
+# they say it is, before their circles cross anywhere in particular. Trilateration
+# needs an angle between its origins: stays scattered over a kilometre pin
+# something 500 m away and tell you almost nothing about something 5 km away,
+# where the arcs are near-parallel and the fit slides along them freely.
+#
+# A quarter is where it sits because Oban is the case that needs excluding and
+# Edinburgh the case that must survive. Oban's stays fill about one square
+# kilometre and quote Dunstaffnage at five: ratio 0.1, and the fit lands in the
+# wrong parish. Edinburgh's landmarks all fit comfortably.
+CROSSING = 0.25
+
+
+def _crossable(points: list[tuple[float, float, float]]) -> bool:
+    """Whether these origins are spread enough to fit a position from at all.
+
+    The check `locate` was missing. Four stays agreeing that somewhere is five
+    kilometres away, from four doorways within 500 m of each other, have between
+    them fixed a direction badly and a distance well — and least squares will
+    still return a point, because it always does. Better to have no coordinate
+    for a landmark than a confident wrong one, since a wrong one goes on to call
+    honest listings liars.
+    """
+    if len(points) < 3:
+        return False
+    lat0 = sum(p[0] for p in points) / len(points)
+    lon0 = sum(p[1] for p in points) / len(points)
+    radius = max(haversine((lat0, lon0), (p[0], p[1])) for p in points)
+    reach = _spread([p[2] for p in points])
+    return bool(reach) and radius / reach >= CROSSING
 
 
 def _trilaterate(points, detour: float = None, rounds: int = 3, steps: int = 600):
@@ -816,10 +989,12 @@ class Verdict:
     new_nearby: set = field(default_factory=set)
     claimed_walk: dict = field(default_factory=dict)
     doubted: list = field(default_factory=list)
+    called: str | None = None                      # a better name, not applied
 
     def anything(self) -> bool:
         return bool(self.fills or self.new_amenities or self.new_traits
-                    or self.new_nearby or self.claimed_walk or self.conflicts)
+                    or self.new_nearby or self.claimed_walk or self.conflicts
+                    or self.called)
 
 
 def against(record: dict, reading: Reading) -> Verdict:
@@ -845,6 +1020,7 @@ def against(record: dict, reading: Reading) -> Verdict:
         else:
             v.conflicts[name] = (held, claimed)
 
+    v.called = reading.called
     v.new_amenities = reading.amenities - set(record.get("amenities") or [])
     v.new_traits = reading.traits - set(record.get("traits") or [])
     v.new_nearby = reading.nearby - set(record.get("nearby") or [])

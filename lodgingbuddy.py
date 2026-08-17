@@ -528,7 +528,7 @@ def cmd_set(args) -> int:
                 rec["tax_included"] = False
                 if blocks > 1:
                     rec["rooms"] = blocks
-    for field in ("price", "nights", "adults", "rooms", "note", "currency",
+    for field in ("name", "price", "nights", "adults", "rooms", "note", "currency",
                   "score", "native_price", "native_currency", "offer",
                   "shares", "bedrooms", "bathrooms", "sleeps",
                   "score_scale", "look", "clean", "address", "summary"):
@@ -838,8 +838,17 @@ def squeeze(name: str, rarity: dict[str, int], width: int, city: str = "") -> st
         tier = (0 if low in TITLE_FILLER else
                 1 if low in TITLE_GENERIC else 2)
         kept.append([word, tier, rarity.get(low, 0), low in town])
-    # Never down to nothing: a stay actually called "Edinburgh" keeps the word.
-    if any(not is_town for *_, is_town in kept):
+    # Never down to nothing, and never down to nothing that names anything —
+    # which is the same rule, applied at the standard this column is held to
+    # everywhere else. A stay actually called "Edinburgh" keeps the word, and so
+    # does "The Oban Apartment", because taking the town out of that leaves
+    # "Apartment", which is a category with a capital letter. Booking has three
+    # of those in Oban alone; a table listing "Apartment", "House" and "Queens"
+    # has spent its widest column saying nothing three times.
+    #
+    # The town goes only when something tier 2 is left standing without it —
+    # a word that is neither grammar nor a word another column already says.
+    if any(tier == 2 and not is_town for _, tier, _, is_town in kept):
         kept = [k for k in kept if not k[-1]]
 
     def out() -> str:
@@ -852,9 +861,13 @@ def squeeze(name: str, rarity: dict[str, int], width: int, city: str = "") -> st
             break          # nothing left but the words actually naming it
         kept.pop(worst)
     # What's left can still open with an orphaned "In" or "By", the noun it
-    # was pointing at having gone.
+    # was pointing at having gone — and can end with one for the same reason,
+    # since the noun that went is usually the town: "Bright 2 Bedroom Flat With
+    # Parking In Oban" was coming out as "...With Parking In".
     while len(kept) > 1 and kept[0][1] == 0:
         kept.pop(0)
+    while len(kept) > 1 and kept[-1][1] == 0:
+        kept.pop()
     text = out() or (name.strip() or "?")
     return text if len(text) <= width else text[:width - 1] + "…"
 
@@ -1411,6 +1424,25 @@ def footnotes(stays, marks, gates, seen_tax, seen_cur, rate,
             f"{config.BASE_CURRENCY}`, or give [currency] a `default_rate` so "
             f"the table can put both on one scale before it sorts them.",
             width=76))
+    # A walk that never happened looks exactly like a walk that can't be
+    # measured, and the column prints "—" for both. Every way the lookup can
+    # fail at capture is quiet on purpose — none of them is a reason to lose you
+    # the record — but quiet at capture and quiet here as well means a router
+    # that was rate-limiting for two minutes leaves five holes in a column you
+    # rank on and never mentions it. Five of the twenty Oban stays, as it
+    # happens, all of them holding perfectly good coordinates.
+    unmeasured = [r for r in stays
+                  if not (r.get("walk_minutes") or {})
+                  and (r.get("address") or (r.get("latitude") is not None
+                                            and r.get("longitude") is not None))]
+    if unmeasured:
+        print("\n" + textwrap.fill(
+            f"{len(unmeasured)} of these have no measured walk and could have "
+            f"one — they hold a location, the lookup just didn't happen or "
+            f"didn't answer. `walk` picks up exactly those and leaves the rest "
+            f"alone: " + ", ".join(sorted(r.get("name") or "?"
+                                          for r in unmeasured)[:4])
+            + (", …" if len(unmeasured) > 4 else ""), width=76))
     # Same predicate as the column, so the note can't turn up explaining a mark
     # that isn't in the table above it.
     if any(from_mark(r, all_in(r)[2]) for r in stays):
@@ -1529,6 +1561,7 @@ def cmd_glean(args) -> int:
     how a fact drops off `gleaned` once a real scrape supplies it.
     """
     stays = load()
+    named: list[tuple[dict, str]] = []
     if args.id:
         one = find(stays, args.id)
         if not one:
@@ -1553,6 +1586,8 @@ def cmd_glean(args) -> int:
         verdict = summary.apply(rec, places, detour)
         if verdict.conflicts:
             conflicts.append((rec, verdict))
+        if verdict.called:
+            named.append((rec, verdict.called))
         doubted += [(rec, c) for c in verdict.doubted]
         if verdict.anything():
             read += 1
@@ -1575,6 +1610,17 @@ def cmd_glean(args) -> int:
             for name, (held, said) in verdict.conflicts.items():
                 print(f"  {rec.get('name') or '?'}: {name} is {held} on the "
                       f"record, the write-up says {said}")
+    if named:
+        # Not applied, and not a conflict either — the record hasn't got a name
+        # to disagree with, it has a URL slug that got title-cased. Which of the
+        # two is better is genuinely a judgement: the write-up has "Campbells
+        # Loft" for a stay filed as "Bright 2 Bedroom Flat With Parking In
+        # Oban", and it also has plain "Raniven" for one whose slug says Raniven
+        # Guest House. So it is offered, with the one word it takes to accept.
+        print("\nThese are filed under their web address. Their write-ups call "
+              "them something — `set <id> --name` if it reads better:")
+        for rec, said in named:
+            print(f"  {rec.get('name') or '?'}\n      → {said}")
     if doubted:
         print("\nClaims thrown out as impossible against the stay's own "
               "coordinates:")
@@ -2593,6 +2639,9 @@ def main() -> int:
     s.add_argument("--summary",
                    help="the listing's own write-up; replaces what's there, "
                         "where pasting it at the prompt adds to it")
+    s.add_argument("--name", help="what to call it in the table — the capture "
+                   "starts from the web address, and `glean` offers what the "
+                   "write-up calls it")
     s.add_argument("--currency")
     s.add_argument("--note")
     s.add_argument("--offer", help="which rate this is, e.g. '3 adults, free cancellation'")
