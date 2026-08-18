@@ -171,8 +171,8 @@ def shares_without_a_door(rec: dict) -> float | None:
     return float(max(0, shares - shut))
 
 
-def walked(rec: dict) -> tuple[dict[str, float], bool]:
-    """Minutes to each destination, and whether any of them came from the prose.
+def walked(rec: dict) -> tuple[dict[str, float], set[str]]:
+    """Minutes to each destination, and which of them came from the prose.
 
     The router's answer wins wherever there is one. A listing's own "8 minutes
     from the castle" is a real fact and the write-up is where most of them live,
@@ -183,19 +183,24 @@ def walked(rec: dict) -> tuple[dict[str, float], bool]:
     which is a hole. A stay captured with maps off, or one the router couldn't
     place, scored nothing at all for its location and sat at the bottom of the
     table looking like somewhere remote.
+
+    Which ones were borrowed comes back by label rather than as a yes/no,
+    because a table with a column per destination has somewhere to put that: the
+    "≈" belongs on the one figure the seller gave us, not on a row where three
+    numbers out of four were measured.
     """
     import database  # local, for the same reason complaints() imports sources
     import summary
 
     measured = dict(rec.get("walk_minutes") or {})
     if not config.TRUST_CLAIMED_WALK:
-        return measured, False
+        return measured, set()
     wanted = [d["label"] for d in config.destinations_for(database.current())]
-    borrowed = False
+    borrowed: set[str] = set()
     for label, minutes in summary.claimed_for(rec, wanted).items():
         if label not in measured:
             measured[label] = minutes
-            borrowed = True
+            borrowed.add(label)
     return measured, borrowed
 
 

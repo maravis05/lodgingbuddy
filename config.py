@@ -701,10 +701,17 @@ CITY_TEMPLATE = '''\
 # vague about — a terminal, a trailhead, a pedestrianised street it resolves to
 # one end of.
 #
+# `column` gives one of these a column of its own in `list`, headed with
+# whatever you set it to, in place of the mean — three at most, and the heading
+# is also what `--sort` calls it. The mean is the right number to score on and
+# the wrong one to read: it hides the one destination you care most about
+# behind an average of the other two.
+#
 # [[destination]]
 # label = "Old town"
 # address = "..."
 # weight = 0.6
+# column = "Old town"
 
 
 # ── What the write-ups name ───────────────────────────────────────────────

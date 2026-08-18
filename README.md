@@ -49,7 +49,10 @@ in it — because that is what typing one at a checkout page is for.
 `--drop-price` forgets one and hands the stay back to what was captured.
 
 `list --sort` takes `value` (default), `share`, `price`, `score`, `sleeps`,
-`walk`, `points`, `checkin`, `name`.
+`walk`, `points`, `checkin`, `name` — plus one per destination that has a
+column of its own, named after that column: `list --sort whisky` ranks the Oban
+set on the walk to the distillery. `--sort` with a name nothing answers to
+prints the whole list for whichever database you are in.
 
 ## One database, one set of dates
 
@@ -323,7 +326,9 @@ one is kept and marked `✗`, never dropped; one that can't be judged is marked
 
 At startup `scoring.complaints()` reports weights that can never fire — a tier
 naming a factor that doesn't exist, a bonus naming a slug nothing produces, a
-destination missing a label or a location.
+destination missing a label or a location. `walk_complaints()` reports the same
+class of thing about the destination columns: more of them asking for a column
+than the table holds, or a heading that collides with the name of a sort.
 
 ## Walking distances
 
@@ -340,6 +345,20 @@ call per stay. Providers:
 Destinations carry a `weight`; the walk tier scores the weighted mean over the
 destinations actually measured. A destination may name a `db`, in which case it
 applies only to that database — one config can hold two trips.
+
+A destination may also carry a `column`, which gives it a column of its own in
+`list` under that heading, and a `--sort` under that name. Up to three at a
+time; where every destination has one the mean stands down, and where one
+hasn't it stays as the column covering whatever isn't spelled out. They share a
+single "Walk" heading with the place names in the units row under it, and on a
+window too narrow for all of them they hand their columns back one at a time —
+last the one you sorted on — and say so under the table.
+
+The mean is the right figure to score on and the wrong one to read. Weighted
+0.6/0.25/0.15 across Oban's town centre, ferry and distillery, it flattens two
+clean clusters — fourteen of the fifteen measured stays are either 11 to 14
+minutes from the ferry terminal or 20 to 27 — into one column, and eight of them
+are within ten minutes of the town centre either way.
 
 This is the only feature that sends a stay's location to a third party.
 `[maps] enabled = false` disables it completely; every other command still
@@ -424,14 +443,15 @@ other files live.
 | `[scoring]` | `price_unit`, `[scoring.tiers.*]`, `[scoring.bonuses]` |
 | `[filters]` | The gates |
 | `[maps]` | Provider, hosts, whether any of it is enabled |
-| `[[destination]]` | `label`, plus `address` or `latitude`/`longitude`; optional `weight` and `db` |
+| `[[destination]]` | `label`, plus `address` or `latitude`/`longitude`; optional `weight`, `column` and `db` |
 | `[[landmark]]` | `name`; optional `match` (regex for how write-ups spell it) and `latitude`/`longitude` |
 | `[[source]]` | `name`, `domain`, `parser`, `currency`, `tax_included`, `score_scale` |
 | `[bookmarklet]` | Build inputs and outputs |
 
 Columns available to `display.columns`: `name`, `source`, `where`, `checkin`,
 `nts`, `slp`, `space`, `all_in`, `share_nt`, `score`, `reviews`, `clean`,
-`look`, `walk`, `kind`, `traits`, `points`, `value`.
+`look`, `walk`, `kind`, `traits`, `points`, `value`. `walk` is one entry that
+may print as several — see the destination `column` above.
 
 Settings that can never take effect — a tier naming a factor that doesn't
 exist, a bonus naming a slug nothing produces, a landmark whose `match` won't

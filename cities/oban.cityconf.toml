@@ -37,11 +37,32 @@
 # Their coordinates land somewhere the foot graph doesn't connect to. `walk`
 # records that now instead of leaving a hole, and `set <id> --address` is the
 # only thing that moves it.
+#
+# All three carry a `column`, so `list` prints the walk to each rather than the
+# mean of the three, and `--sort town`, `--sort ferry` and `--sort whisky` each
+# rank on one of them. What that buys, on the fifteen of the twenty the router
+# would measure:
+#
+# The ferry is what the mean was hiding. Its weight is 0.25 against the town
+# centre's 0.6, and fourteen of the fifteen fall into two clean clusters — 11 to
+# 14 minutes from the terminal, or 20 to 27, with the fifteenth an hour and a
+# quarter out — which the mean smears into one column. Eight are within ten
+# minutes of George Street and twenty or more from the pier, a distinction worth
+# having on the morning of a sailing and not legible in a single figure.
+#
+# The distillery is the opposite finding, and it is a finding rather than a
+# fault: it is on Stafford Street, which is the town centre, and its column
+# never differs from the town centre's by more than six minutes and averages
+# under four. So it mostly restates the column beside it. Kept anyway, because
+# "can I walk to the distillery" is a question somebody actually asks and a
+# column answering "yes, always" answers it — but if the table needs the width
+# back, this is the one to take it from.
 
 [[destination]]
 label = "Oban town centre"
 address = "George Street, Oban PA34 5NX, UK"
 weight = 0.6
+column = "Town"
 
 [[destination]]
 label = "Ferry terminal"
@@ -54,11 +75,13 @@ label = "Ferry terminal"
 latitude = 56.412035
 longitude = -5.475698
 weight = 0.25
+column = "Ferry"
 
 [[destination]]
 label = "Oban Distillery"
 address = "Oban Distillery, Stafford Street, Oban PA34 5NH, UK"
 weight = 0.15
+column = "Whisky"
 
 
 # ── What the write-ups name ───────────────────────────────────────────────

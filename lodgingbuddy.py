@@ -853,6 +853,82 @@ SORT_COLUMN = {
 }
 
 
+def _by_walk(label: str):
+    """Nearest that one place first, and the stays we can't say about last."""
+    def key(rec: dict, rate: float | None):
+        minutes = scoring.walked(rec)[0].get(label)
+        return (minutes is None, minutes or 0)
+    return key
+
+
+def sorts(db: str | None = None) -> dict:
+    """Every order this database can be read in.
+
+    The fixed ones, plus one per destination with a column of its own — named
+    after its heading, so the flag and the column you're reading spell the same
+    word. `--sort walk` is still the weighted mean over all of them, which is
+    what the score is on; `--sort distillery` is the one number.
+
+    Worked out per call rather than baked in, because `db` at the prompt moves
+    the destinations, and a list of sorts from the city you were in an hour ago
+    is worse than none.
+    """
+    out = dict(SORTS)
+    for key, head in walk_columns(db):
+        # A heading colliding with a sort we already have keeps the old
+        # meaning; walk_complaints says so rather than either one winning
+        # quietly.
+        out.setdefault(head.lower(), _by_walk(key.removeprefix(WALK_PREFIX)))
+    return out
+
+
+def sort_name(text: str) -> str:
+    """A --sort value, checked against the sorts this database actually has.
+
+    A `type` rather than `choices`, because argparse settles `choices` when the
+    parser is built and the prompt keeps one parser across a `db`. The type runs
+    at parse time, so `--sort distillery` starts working the moment you switch
+    to the city that has a distillery, and stops when you switch away.
+    """
+    if text in sorts():
+        return text
+    raise argparse.ArgumentTypeError(
+        f"no sort called {text!r} here — have: {', '.join(sorted(sorts()))}")
+
+
+# Where a `default_sort` naming a destination lands when you switch to a city
+# that has no such place. Something has to be printed, and this is the order the
+# table is for.
+FALLBACK_SORT = "value"
+
+
+def chosen_sort(args) -> str:
+    """Which order to print in: what was typed, or what the config opens on.
+
+    Read here rather than left to argparse's `default=`, which settles when the
+    parser is built. The prompt keeps one parser across a `db`, and a city whose
+    file opens on the walk to its distillery would otherwise hand that default
+    to the next city, where it means nothing.
+    """
+    name = getattr(args, "sort", None) or config.DEFAULT_SORT
+    if name in sorts():
+        return name
+    print(f"{config.where()}: default_sort={name!r} isn't a sort here — "
+          f"showing {FALLBACK_SORT} instead. Have: "
+          f"{', '.join(sorted(sorts()))}", file=sys.stderr)
+    return FALLBACK_SORT
+
+
+def sort_column(name: str, db: str | None = None) -> str | None:
+    """Which column holds the figure that sort ordered on, where one does."""
+    if name in SORT_COLUMN:
+        return SORT_COLUMN[name]
+    for key, head in walk_columns(db):
+        if head.lower() == name:
+            return key
+    return None
+
+
 def _pct(value: float | None) -> str:
     # Bare, because the "%" is in the unit row under the header. Thirty of them
     # down a column is thirty characters saying the same thing.
@@ -1326,10 +1402,20 @@ MIN_TITLE, MAX_TITLE = 28, 56
 LEADERS = 3
 
 
-def _header(col: str) -> str:
+def _header(col: str, table: dict | None = None) -> str:
     # The per-share column is the one you compare on, so it says whose money it
     # is — a bare "P/p/nt" invited the assumption that it was split three ways.
-    return COLUMNS[col][0] or config.SHARE_LABEL.title()
+    # None asks for that; an empty string is a column that means to be headless,
+    # which is how the destination columns sit under one shared "Walk".
+    head = (table or COLUMNS)[col][0]
+    return config.SHARE_LABEL.title() if head is None else head
+
+
+def _and(words: list[str]) -> str:
+    """A list of things as a sentence would say it."""
+    if len(words) < 3:
+        return " and ".join(words)
+    return ", ".join(words[:-1]) + " and " + words[-1]
 
 
 def _commonest(values) -> str | None:
@@ -1373,9 +1459,13 @@ COLUMNS = {
     "reviews":  ("Revs", "", lambda r, ctx: str(r.get("reviews") or "—"), ">", "good"),
     "clean":    ("Clean", "%", lambda r, ctx: _pct(scoring.cleanliness(r)), ">", "good"),
     "look":     ("Look", "%", lambda r, ctx: _pct(scoring.look(r)), ">", "good"),
-    # "≈" says the figure is the listing's own claim rather than a routed one.
-    # Same column because it answers the same question, marked because it was
-    # answered by the seller.
+    # The weighted mean over every destination, which is the figure the walk
+    # tier scores. Where the destinations have columns of their own it stands
+    # down in favour of them — see walk_columns.
+    #
+    # "≈" says at least one of the figures behind it is the listing's own claim
+    # rather than a routed one. Same column because it answers the same
+    # question, marked because it was answered by the seller.
     "walk":     ("Walk", "min", lambda r, ctx: (f"{scoring.walked(r)[1] and '≈' or ''}"
                                                 f"{scoring.walk_minutes(r):.0f}"
                                                 if scoring.walk_minutes(r) is not None else "—"), ">", "what"),
@@ -1389,6 +1479,138 @@ COLUMNS = {
     "value":    ("Value", "", lambda r, ctx: (f"{ctx['score'](r).value:.1f}"
                                               if ctx["score"](r).value is not None else "—"), ">", "good"),
 }
+
+
+# ─────────────────────────── a column per place ────────────────────────────
+#
+# The Walk column above is a weighted mean, and a mean is the wrong shape for
+# the question people actually ask of it. "Twelve minutes" to a basket holding
+# the town centre, the ferry and the distillery says nothing about whether you
+# can walk to the distillery, and the one destination you care most about is
+# exactly the one the average hides. So a destination may ask for a column of
+# its own, and the destinations that do replace the mean.
+#
+# `column` in the [[destination]] table is both the request and the heading:
+#
+#     [[destination]]
+#     label = "Oban Distillery"
+#     column = "Distillery"
+#
+# The heading is separate from the label because the label is prose meant to be
+# read once, in `show` and in the config, and a column heading is two or three
+# syllables read forty times down a table. "Oban Distillery" is a fine label and
+# an eleven-character column.
+#
+# They share one heading rather than wearing "min" three times. The first of
+# them is headed "Walk" and the rest are headless, and the row underneath —
+# which is the units row, and dim — carries the place names. So the group reads
+# as one question asked of three places, which is what it is:
+#
+#     │  Walk                     │
+#     │  Town  Ferry  Distillery  │
+#     │    12     18          22  │
+WALK_HEAD = "Walk"
+# The internal column key, which has to be something no config.toml `columns`
+# entry could collide with. The label is on the end of it because that is what
+# every renderer and sort below needs back out.
+WALK_PREFIX = "walk:"
+# How many destinations may have a column at once. Not a matter of taste: four
+# of them is a third of a terminal, spent on a question the mean answered in
+# four characters. Anything past this is dropped with a complaint rather than
+# silently, because a destination you asked for and didn't get is worse than one
+# you were told you couldn't have.
+WALK_COLUMNS = 3
+
+
+def walk_columns(db: str | None = None) -> list[tuple[str, str]]:
+    """The destinations asking for a column, as (column key, heading).
+
+    In the order the config file lists them, which is the order they appear in
+    — a destination list is written most-important-first and the table should
+    read the same way round.
+    """
+    import database
+
+    out = []
+    for dest in config.destinations_for(db or database.current()):
+        head = (dest.get("column") or "").strip()
+        if head and dest.get("label"):
+            out.append((WALK_PREFIX + dest["label"], head))
+    return out[:WALK_COLUMNS]
+
+
+def walk_cell(label: str):
+    """One destination's minutes, for the column that names only that one."""
+    def cell(rec: dict, ctx: dict) -> str:
+        minutes, borrowed = scoring.walked(rec)
+        if label not in minutes:
+            return "—"
+        return f"{'≈' if label in borrowed else ''}{minutes[label]:.0f}"
+    return cell
+
+
+def table_columns(db: str | None = None) -> dict:
+    """Every column this database can print — the fixed ones and its own places.
+
+    Headless on purpose: the heading is put back onto whichever destination
+    column survives to be printed first, so that dropping one to a narrow
+    terminal doesn't take the word "Walk" with it.
+    """
+    cols = dict(COLUMNS)
+    for key, head in walk_columns(db):
+        cols[key] = ("", head, walk_cell(key.removeprefix(WALK_PREFIX)),
+                     ">", "what")
+    return cols
+
+
+def spell_out_walk(chosen: list[str], spelled: list[str], db: str) -> list[str]:
+    """`walk` in the config's column list, expanded into a column per place.
+
+    The mean stays only where it still says something the columns don't — a
+    destination that asked for no column of its own is still in the average, and
+    dropping the average would drop it from the table entirely. Where every
+    destination is spelled out, the mean is those same numbers added up again.
+    """
+    covered = {key.removeprefix(WALK_PREFIX) for key in spelled}
+    everything = {d["label"] for d in config.destinations_for(db)
+                  if d.get("label")}
+    out = []
+    for col in chosen:
+        if col != "walk" or not spelled:
+            out.append(col)
+            continue
+        out.extend(spelled)
+        if everything - covered:
+            out.append("walk")
+    return out
+
+
+def walk_complaints(db: str | None = None) -> list[str]:
+    """Destinations that asked for a column and can't have the one they asked for.
+
+    Both of these silently do the wrong thing otherwise: a fourth column is
+    dropped, and a heading that collides with a sort's name leaves `--sort` with
+    two meanings and one of them unreachable.
+    """
+    import database
+
+    db = db or database.current()
+    asked = [(d["label"], (d.get("column") or "").strip())
+             for d in config.destinations_for(db)
+             if (d.get("column") or "").strip() and d.get("label")]
+    out = []
+    if len(asked) > WALK_COLUMNS:
+        dropped = ", ".join(label for label, _ in asked[WALK_COLUMNS:])
+        out.append(f"{len(asked)} destinations ask for a column and the table "
+                   f"holds {WALK_COLUMNS} — no column for {dropped}. They are "
+                   f"still measured, still scored, and still in `show`.")
+    for label, head in asked[:WALK_COLUMNS]:
+        if head.lower() in SORTS:
+            out.append(f"[[destination]] {label!r} is headed {head!r}, which is "
+                       f"already the name of a sort — `--sort {head.lower()}` "
+                       f"will keep meaning the old one. Head it something else "
+                       f"to sort on the walk to it.")
+    return out
 
 
 def leading_mark(rec: dict, gates: list[tuple[str, str]]) -> str:
@@ -1435,7 +1657,8 @@ def cmd_list(args) -> int:
                   "`list` without --viable shows them and why.")
             return 0
 
-    stays.sort(key=lambda r: SORTS[args.sort](r, rate))
+    sort = chosen_sort(args)
+    stays.sort(key=lambda r: sorts()[sort](r, rate))
 
     # Collected over the stays rather than as the price column renders, so that
     # dropping `all_in` from `columns` doesn't also drop the note explaining
@@ -1484,7 +1707,10 @@ def cmd_list(args) -> int:
     # `name` is not a column any more — it heads the left pane, with the prose
     # wrapped underneath it — so it is taken out of the list rather than
     # rejected, and an unedited config.toml still means what it meant.
+    cols = table_columns()
+    spelled = [key for key, _ in walk_columns()]
     chosen = [c for c in config.COLUMNS if c in COLUMNS and c != "name"]
+    chosen = spell_out_walk(chosen, spelled, database.current())
     if unknown := [c for c in config.COLUMNS if c not in COLUMNS]:
         print(f"{config.PATH}: no such column {', '.join(unknown)} — "
               f"have: {', '.join(COLUMNS)}", file=sys.stderr)
@@ -1494,54 +1720,127 @@ def cmd_list(args) -> int:
     # pushing everything right for no information at all. Said once underneath
     # instead. Only worth doing where there are enough rows for "every row" to
     # mean something, and never to the two columns you came to read.
+    #
+    # A destination column is one of those: it is in the table because the
+    # config named that place, and "the same on every row" is a fact about the
+    # place worth reading in the column where you went looking for it.
     fixed: list[tuple[str, str]] = []
     if len(stays) >= 3:
         for col in list(chosen):
-            if col in ("points", "value"):
+            if col in ("points", "value") or col in spelled:
                 continue
-            seen = {COLUMNS[col][2](rec, ctx) for rec in stays}
+            seen = {cols[col][2](rec, ctx) for rec in stays}
             if len(seen) == 1 and (only := seen.pop()).strip() not in ("", "—"):
-                fixed.append((_header(col), only))
+                fixed.append((_header(col, cols), only))
                 chosen.remove(col)
-
-    data = [[COLUMNS[c][2](rec, ctx) for c in chosen] for rec in stays]
-    heads = [_header(c) for c in chosen]
-    units = [u(ctx) if callable(u := COLUMNS[c][1]) else u for c in chosen]
-    widths = [max(len(heads[i]), len(units[i]), *(len(row[i]) for row in data))
-              for i in range(len(chosen))]
-    align = [COLUMNS[c][3] for c in chosen]
-    # Four questions, not ten columns: what the place is, what it costs, how
-    # good it is. A rule where the question changes gives the eye somewhere to
-    # stop, and costs one character each.
-    groups = [COLUMNS[c][4] for c in chosen]
-
-    def pane(cells: list[str], styles: list | None = None) -> str:
-        out: list[str] = []
-        for i, (cell, w, a) in enumerate(zip(cells, widths, align)):
-            if i and groups[i] != groups[i - 1]:
-                out.append(VERT)
-            text = cell.rjust(w) if a == ">" else cell.ljust(w)
-            # After padding, never before: an escape sequence is no width on
-            # the screen and several characters to ljust, and the column would
-            # come out short by exactly as much as the styling cost.
-            out.append(styles[i](text) if styles and styles[i] else text)
-        return config.COLUMN_GAP.join(out)
 
     marked = {key_of(r): leading_mark(r, gates[key_of(r)]) for r in stays}
     mark_w = 1 if any(m.strip() for m in marked.values()) else 0
     rank_w = len(str(len(stays)))
     # "12 " before the title, or "12 ✗ " where anything in the table is marked.
     lead_w = rank_w + 1 + (mark_w + 1 if mark_w else 0)
-
-    # The numbers are as wide as the numbers are; the title column gets what's
-    # left. So widening the window widens the only column that can use it,
-    # rather than leaving a number in config.toml to guess at.
-    pane_w = len(pane(heads))       # exact: the separators are in it too
     room = max(shutil.get_terminal_size((120, 24)).columns, 60)
+
+    def lay_out(chosen: list[str]):
+        """Everything that depends on which columns survived, in one place.
+
+        A function because it may have to be answered twice: the destination
+        columns are worth more than the title column is, right up until the
+        terminal is too narrow for both, and the only way to know that is to
+        measure the table you'd have printed.
+        """
+        data = [[cols[c][2](rec, ctx) for c in chosen] for rec in stays]
+        heads = [_header(c, cols) for c in chosen]
+        units = [u(ctx) if callable(u := cols[c][1]) else u for c in chosen]
+        # The destinations are headless in the table above so that they can
+        # share one heading here, over whichever of them is printed first. Put
+        # on after the collapse rather than in the table, so that losing a
+        # column can never take the word "Walk" off the ones that are left.
+        #
+        # The mean joins them when it is there beside them, as one more place
+        # to walk to rather than a second column called Walk — which is what it
+        # read as, and one of the two was a mean of the other.
+        if here := [i for i, c in enumerate(chosen) if c in spelled]:
+            for i, col in enumerate(chosen):
+                if col == "walk":
+                    heads[i], units[i] = "", "mean"
+                    here.append(i)
+            heads[min(here)] = WALK_HEAD
+        widths = [max(len(heads[i]), len(units[i]), *(len(row[i]) for row in data))
+                  for i in range(len(chosen))]
+        align = [cols[c][3] for c in chosen]
+        # Four questions, not ten columns: what the place is, what it costs, how
+        # good it is. A rule where the question changes gives the eye somewhere
+        # to stop, and costs one character each.
+        groups = [cols[c][4] for c in chosen]
+
+        def pane(cells: list[str], styles: list | None = None) -> str:
+            out: list[str] = []
+            for i, (cell, w, a) in enumerate(zip(cells, widths, align)):
+                if i and groups[i] != groups[i - 1]:
+                    out.append(VERT)
+                text = cell.rjust(w) if a == ">" else cell.ljust(w)
+                # After padding, never before: an escape sequence is no width on
+                # the screen and several characters to ljust, and the column
+                # would come out short by exactly as much as the styling cost.
+                out.append(styles[i](text) if styles and styles[i] else text)
+            return config.COLUMN_GAP.join(out)
+
+        return data, heads, units, pane
+
+    def fits(pane_w: int) -> int:
+        """What the title column would get, beside a numbers pane this wide."""
+        return room - lead_w - len(SEAM) - pane_w
+
+    def cut_back(keep: list[str]) -> list[str]:
+        """The same columns with the destinations cut back to `keep`.
+
+        The mean comes back in their place, since it is now covering places
+        that have no column of their own — and goes in where the first of them
+        was, so the walk figures stay where the eye last found them.
+        """
+        out, done = [], False
+        for col in chosen:
+            if col not in spelled:
+                # `walk` is already in the list whenever some destination went
+                # uncolumned, and mustn't be printed twice.
+                if not (col == "walk" and done):
+                    out.append(col)
+            elif not done:
+                out.extend(keep + ["walk"])
+                done = True
+        return out
+
+    # A column each to three destinations costs about fifteen characters, and on
+    # a narrow terminal it takes them off the only column that can't spare them
+    # — the one holding the name and the write-up. So they give their columns
+    # up, in this order: all of them, then all but the one you sorted on — which
+    # has to survive, or the table is ordered by a number it doesn't show — then
+    # the plain mean, which is the same information at a fifth of the width.
+    #
+    # Whichever of these fits first. The last is the fallback and prints however
+    # narrow the window is, because something has to.
+    sorted_on = sort_column(sort)
+    tries = [chosen]
+    if sorted_on in spelled:
+        tries.append(cut_back([sorted_on]))
+    tries.append(cut_back([]))
+
     title_w = config.TITLE_WIDTH
+    for attempt in tries:
+        chosen = attempt
+        data, heads, units, pane = lay_out(chosen)
+        # The numbers are as wide as the numbers are; the title column gets
+        # what's left. So widening the window widens the only column that can
+        # use it, rather than leaving a number in config.toml to guess at.
+        pane_w = len(pane(heads))   # exact: the separators are in it too
+        if title_w or fits(pane_w) >= MIN_TITLE:
+            break
     if not title_w:
-        title_w = max(MIN_TITLE,
-                      min(room - lead_w - len(SEAM) - pane_w, MAX_TITLE))
+        title_w = max(MIN_TITLE, min(fits(pane_w), MAX_TITLE))
+    # Said under the table rather than silently: a destination that has quietly
+    # stopped having a column is one you go on reading the wrong number for.
+    squeezed = [head for key, head in walk_columns() if key not in chosen]
 
     head = " " * lead_w + "Property".ljust(title_w) + SEAM + pane(heads)
     unit = " " * (lead_w + title_w) + SEAM + pane(units)
@@ -1565,7 +1864,7 @@ def cmd_list(args) -> int:
     # The few rows off the top are what you opened the table to find, so the
     # figure they were sorted into this order by is the one that carries it.
     # Costs no width, which the bar this replaced could not say for itself.
-    top = [LEAD if c == SORT_COLUMN.get(args.sort) else None for c in chosen]
+    top = [LEAD if c == sort_column(sort) else None for c in chosen]
     for place, rec in enumerate(stays, 1):
         title = squeeze(rec.get("name") or "?", titles, title_w, config.CITY or "")
         lead = f"{str(place).rjust(rank_w)} "
@@ -1590,9 +1889,16 @@ def cmd_list(args) -> int:
     if fixed:
         print("\n" + DIM("The same on every row, so not in the table: "
                          + ", ".join(f"{h.lower()} {v}" for h, v in fixed) + "."))
+    if squeezed:
+        print("\n" + DIM(textwrap.fill(
+            f"No room for a column each: {_and(squeezed)} gave "
+            f"{'theirs' if len(squeezed) > 1 else 'its'} up, and Walk is the "
+            f"weighted mean over all of them again. Widen the window, or set "
+            f"[display] title_width to take the room off the names on purpose. "
+            f"`show <id>` prints every walk either way.", width=76)))
     footnotes(stays, marks, gates, seen_tax, seen_cur, rate, common_tax)
     asked = getattr(args, "links", None)
-    links(stays, args.sort, config.LINKS if asked is None else asked)
+    links(stays, sort, config.LINKS if asked is None else asked)
     return 0
 
 
@@ -2666,7 +2972,7 @@ def cmd_url(args) -> int:
     # The configured rate rather than a flag of our own: `value` and `share`
     # divide by it, so the order has to be arrived at the same way `list`
     # arrives at it when you don't pass `--rate` either.
-    stays.sort(key=lambda r: SORTS[args.sort](r, RATE))
+    stays.sort(key=lambda r: sorts()[chosen_sort(args)](r, RATE))
     found = [r["url"] for r in stays if r.get("url")]
     if not found:
         print("No URLs stored in this database.", file=sys.stderr)
@@ -3163,17 +3469,23 @@ def main() -> int:
     s.set_defaults(func=cmd_set)
 
     l = sub.add_parser("list", help="show everything side by side")
-    # argparse type-checks a default but not its membership in `choices`, so a
-    # typo in the config would surface as a KeyError halfway through `list`.
-    if config.DEFAULT_SORT not in SORTS:
-        sys.exit(f"{config.PATH}: default_sort={config.DEFAULT_SORT!r} isn't one "
-                 f"of: {', '.join(sorted(SORTS))}")
+    # A `default_sort` that names nothing used to be fatal here, because it
+    # would otherwise have surfaced as a KeyError halfway through `list`. It
+    # can't now — chosen_sort says so and falls back — and checking it here was
+    # the wrong moment anyway: the prompt outlives this parser, and a city whose
+    # file opens on the walk to its distillery would take the whole process down
+    # the first time you started in a different one.
+    #
     # Warned about rather than fatal: a weight that can't fire is a settings
     # mistake, but it shouldn't stand between you and the four stays you've
     # already captured.
-    for complaint in scoring.complaints():
+    for complaint in scoring.complaints() + walk_complaints():
         print(f"{config.where()}: {complaint}", file=sys.stderr)
-    l.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT)
+    # No `default=`: argparse would settle it here, and `db` at the prompt
+    # moves both the config and the destinations under it. chosen_sort asks
+    # again at the moment the table is printed.
+    l.add_argument("--sort", type=sort_name, default=None,
+                   help=f"how to order the table (default {config.DEFAULT_SORT})")
     l.add_argument("--viable", action="store_true",
                    help="hide stays that fail a must-have in [filters]")
     l.add_argument("--no-facts", action="store_true",
@@ -3250,7 +3562,7 @@ def main() -> int:
     u = sub.add_parser("url", help="print the link back to a listing")
     u.add_argument("id", nargs="?",
                    help="which stay; omit for all of them, one per line")
-    u.add_argument("--sort", choices=sorted(SORTS), default=config.DEFAULT_SORT,
+    u.add_argument("--sort", type=sort_name, default=None,
                    help="what order to print them in, when no id is given")
     u.set_defaults(func=cmd_url)
 

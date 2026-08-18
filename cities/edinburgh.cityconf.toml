@@ -14,6 +14,19 @@
 #
 # Coordinates rather than addresses: both are pedestrianised stretches Nominatim
 # resolves to one end or the other.
+#
+# Both carry a `column`, so `list` prints the two walks side by side instead of
+# the mean of them, and `--sort mile` and `--sort waverley` rank on one each.
+#
+# Honestly, on this corpus they buy less than Oban's three do. St Giles' and
+# Waverley are 300 m apart and the thirty stays agree about them: the two
+# figures are never more than five minutes apart, and within three on eighteen
+# of the thirty.
+# That is the same argument that kept Princes Street off this list, arriving one
+# step later — a basket of places this close measures one thing. The columns
+# stay because five minutes on a fifteen-minute walk is a third of it, and
+# because which of the two you are nearer is a real question for anyone whose
+# trip starts and ends with a train.
 
 [[destination]]
 label = "Royal Mile"
@@ -21,12 +34,14 @@ label = "Royal Mile"
 latitude = 55.9495
 longitude = -3.1906
 weight = 0.6
+column = "Mile"
 
 [[destination]]
 label = "Edinburgh Waverley"
 latitude = 55.9520
 longitude = -3.1892
 weight = 0.4
+column = "Waverley"
 
 
 # ── What the write-ups name ───────────────────────────────────────────────

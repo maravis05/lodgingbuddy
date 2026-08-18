@@ -94,12 +94,23 @@ label = "share"
 # sleeps, walk, checkin, name. Value is points per unit of cost, which is the
 # question you opened the table to ask — cheapest is a different one, and
 # `list --sort share` is still there for it.
+#
+# A destination given a `column` adds one more, named after that column: with
+# the Oban list below, `list --sort whisky` ranks on the walk to the distillery
+# and nothing else. `walk` is still the weighted mean over all of them, which is
+# the figure the score is on. `list --sort nonsense` names everything this
+# database has.
 default_sort = "value"
 # Which columns `list` prints, and in what order. Pick from: source, where,
 # checkin, nts, slp, space, all_in, share_nt, score, reviews, clean, look,
 # walk, kind, traits, points, value. All of them at once is wider than a
 # terminal, and which ones earn their place changes with the trip — `where` and
 # `checkin` say nothing when every stay is the same town on the same dates.
+#
+# `walk` is one entry and may print as several. Any [[destination]] carrying a
+# `column` gets a column of its own here, in place of the mean — see the
+# destination docs further down. On a window too narrow for all of them they
+# hand their columns back, one at a time, and say so under the table.
 #
 # `name` is listed here for old configs and is not one of them: the title heads
 # the left-hand pane, with the write-up wrapped underneath it, and the columns
@@ -123,8 +134,10 @@ where_width = 20
 # wraps. 0 fits it to the terminal: the numbers take what they need and the
 # title gets everything left over, so widening the window widens the only
 # column that can use it. Held between 28 and 56 either way — narrower can't
-# name a place, wider is a paragraph. On a terminal too narrow for both, the
-# value bar is dropped before the title is.
+# name a place, wider is a paragraph. On a terminal too narrow for both, a
+# destination's own walk column is given up before the title is — set this to a
+# number and that trade goes the other way, since a title width you asked for is
+# one nothing gets to take back.
 title_width = 0
 
 # A rule between stays, every N of them. 1 gives each stay its own block, which
@@ -439,9 +452,35 @@ require = []
 # replaces whatever this file said.
 #
 #   [[destination]]  label, plus address or latitude/longitude; optional weight
-#                    (its share of the average the walk tier scores) and db
+#                    (its share of the average the walk tier scores), column,
+#                    and db
 #   [[landmark]]     name, optional match (a regex for how the write-ups spell
 #                    it), optional latitude/longitude to check claims against
+#
+# `column` is what turns one of those into a column of its own in `list`, and is
+# the heading it gets:
+#
+#   [[destination]]
+#   label = "Oban Distillery"
+#   column = "Whisky"
+#
+# Worth knowing why it exists. The walk tier scores a weighted mean, and a mean
+# is the wrong shape for the question people actually ask of it: "twelve
+# minutes" to a basket holding the town centre, the ferry and the distillery
+# says nothing about whether you can walk to the distillery, and the one place
+# you care most about is exactly the one the average hides. Name it here and it
+# gets its own numbers, its own column, and its own sort.
+#
+# Three at once, at most — a fourth is a third of the terminal spent on a
+# question the mean answered in four characters, and anything past three is
+# refused out loud rather than dropped quietly. Where every destination has a
+# column the mean stands down; where one hasn't, it stays as the column covering
+# whatever isn't spelled out.
+#
+# The heading is separate from the label because they are read differently: the
+# label is prose, read once, in `show` and in this file, and a heading is two or
+# three syllables read forty times down a table. "Oban Distillery" is a good
+# label and an eleven-character column.
 
 [maps]
 # READ THIS ONE. `walk` sends each stay's coordinates or address, and the
