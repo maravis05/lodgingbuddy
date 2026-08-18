@@ -35,6 +35,7 @@ the code that reads it.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 import sys
@@ -438,6 +439,35 @@ def migrate() -> list[str]:
     return said
 
 
+def span_in(conf: dict, said: list[str], where: str) -> tuple[str, str] | None:
+    """The dates out of a trip file, taken out of it and checked.
+
+    Popped rather than read, so a bare `checkin` doesn't also land in CONFIG as
+    a setting nothing reads. Anything wrong with it is filed and the range
+    dropped, because a half-parsed range is worse than none: it would hold
+    captures to a date the file doesn't actually say.
+    """
+    first, last = conf.pop("checkin", None), conf.pop("checkout", None)
+    if not (first or last):
+        return None
+    if not (first and last):
+        missing = "checkout" if first else "checkin"
+        said.append(f"{where}: checkin and checkout go together — {missing} is "
+                    f"missing, so neither was used")
+        return None
+    try:
+        start = dt.date.fromisoformat(str(first))
+        end = dt.date.fromisoformat(str(last))
+    except (ValueError, TypeError):
+        said.append(f"{where}: dates want YYYY-MM-DD, and {first!r} to {last!r} "
+                    f"isn't a pair of them")
+        return None
+    if end <= start:
+        said.append(f"{where}: checkout {last} isn't after checkin {first}")
+        return None
+    return start.isoformat(), end.isoformat()
+
+
 def city_of(db: str) -> str | None:
     """Which city a database says it is in, if it says.
 
@@ -446,6 +476,19 @@ def city_of(db: str) -> str | None:
     """
     named = _read(db_path(db)).get("city")
     return str(named) if named else None
+
+
+def dates_of(db: str) -> tuple[str, str] | None:
+    """Which dates a database is for, if it says.
+
+    Off the file rather than out of CONFIG, for the same reason as `city_of`:
+    `db` asks this about every database at once, and only one of them is the one
+    in force. Unchecked here — a range that doesn't parse is a settings problem
+    and gets reported as one by `apply`, not by whatever asked this.
+    """
+    conf = _read(db_path(db))
+    first, last = conf.get("checkin"), conf.get("checkout")
+    return (str(first), str(last)) if first and last else None
 
 
 def city_counts(city: str) -> tuple[int, int]:
@@ -464,6 +507,11 @@ DB: str | None = None
 CITY: str | None = None
 CITY_FILE: Path | None = None
 TRIP_FILE: Path | None = None
+# The dates the database in force is for, as (checkin, checkout), or None where
+# it hasn't said yet. What makes one table one comparison: a week in October and
+# a week in November are two different products at two different prices, and a
+# stay captured for the wrong one is not a cheaper stay.
+SPAN: tuple[str, str] | None = None
 # Settings problems worth saying out loud. Collected rather than printed:
 # this module is imported before anything exists to print with, and a bad
 # weight shouldn't stand between you and the stays you already have.
@@ -562,7 +610,7 @@ def apply(db: str) -> None:
     last because it is the narrowest thing said: the city knows where the castle
     is, this trip knows there are three of you.
     """
-    global CONFIG, DB, CITY, CITY_FILE, TRIP_FILE, PROBLEMS
+    global CONFIG, DB, CITY, CITY_FILE, TRIP_FILE, SPAN, PROBLEMS
     if db == DB:
         return
 
@@ -577,6 +625,10 @@ def apply(db: str) -> None:
                         f"own settings — ignored, so it holds the global ones")
 
     city = trip.pop("city", None)
+    # Before the merge, and out of the trip file alone: dates belong to one
+    # database and nothing else. A city config saying when to go would set it
+    # for every trip to that city, which is the one thing it can't know.
+    span = span_in(trip, problems, trip_file.name)
     city_file = None
     city_conf = {}
     if city:
@@ -601,7 +653,7 @@ def apply(db: str) -> None:
     for conf in (city_conf, trip):
         if conf:
             CONFIG = _merge(CONFIG, conf)
-    DB, CITY = db, (str(city) if city else None)
+    DB, CITY, SPAN = db, (str(city) if city else None), span
     CITY_FILE = city_file if city_conf else None
     TRIP_FILE = trip_file if trip_file.exists() and not itself else None
     _bind()
@@ -702,34 +754,64 @@ def start_city(city: str) -> Path:
     return path
 
 
-def set_city(db: str, city: str) -> Path:
-    """Say which city a database is in, in the database's own file.
+def _put_bare(text: str, key: str, value: str) -> str:
+    r"""One top-level key set, and everything else in the file left as typed.
 
     Edited as text rather than rewritten from parsed TOML, because that file is
     yours: it may hold this trip's overrides and the comments explaining them,
-    and a tool that reformatted it every time you switched cities would sooner
-    or later eat one.
+    and a tool that reformatted it every time you named a city or moved a date
+    would sooner or later eat one.
+
+    [ \t] throughout rather than \s, which matches newlines too: either of
+    these patterns written with \s* reaches back over the blank line above what
+    it matched and takes that into the match as well, and the key comes out with
+    a hole punched above it or the line before it eaten.
     """
+    line = f'{key} = "{value}"'
+    found = re.compile(rf"^[ \t]*{key}[ \t]*=.*$", re.M)
+    if found.search(text):
+        return found.sub(line, text, count=1)
+    # A bare key has to come before the first table header or it belongs to that
+    # table. Before the first one rather than at the very top, so it lands under
+    # whatever comments open the file instead of above them.
+    if table := re.search(r"^[ \t]*\[", text, re.M):
+        head, tail = text[:table.start()], text[table.start():]
+        return head.rstrip("\n") + f"\n{line}\n\n" + tail
+    if not text:
+        return line + "\n"
+    return text + ("" if text.endswith("\n") else "\n") + line + "\n"
+
+
+def _trip_text(db: str, path: Path) -> str:
+    """What's in a database's settings file, or the head of a new one."""
+    if path.exists():
+        return _text(path)
+    return (f"# {db} — this database's own settings, over its city's and over\n"
+            f"# {PATH.name}. What belongs here is what's true of this trip rather\n"
+            f"# than of the city: which dates it is for, how many ways the bill\n"
+            f"# splits, a must-have that only matters this time.\n\n")
+
+
+def set_city(db: str, city: str) -> Path:
+    """Say which city a database is in, in the database's own file."""
     path = db_path(db)
     city = name_of(city, "city")
-    line = f'city = "{city}"'
-    if not path.exists():
-        path.write_text(
-            f"# {db} — this database's own settings, over "
-            f"{CITIES_DIR.name}/{city}{CITY_SUFFIX} and\n"
-            f"# {PATH.name}. What belongs here is what's true of this trip rather\n"
-            f"# than of the city: how many ways the bill splits, a must-have that\n"
-            f"# only matters this time.\n\n{line}\n", encoding="utf-8")
-        return path
+    path.write_text(_put_bare(_trip_text(db, path), "city", city),
+                    encoding="utf-8")
+    return path
 
-    text = _text(path)
-    # A bare key has to come before the first table header or it belongs to that
-    # table, so a file that hasn't got one takes it at the top.
-    if re.search(r"^\s*city\s*=.*$", text, re.M):
-        text = re.sub(r"^\s*city\s*=.*$", line, text, count=1, flags=re.M)
-    else:
-        text = line + "\n" + text
-    path.write_text(text, encoding="utf-8")
+
+def set_dates(db: str, first: str, last: str) -> Path:
+    """Say which dates a database is for, in the database's own file.
+
+    Written down rather than left to be worked out from the stays every time,
+    because an empty database has no stays to work it out from and that is
+    exactly when it matters — the first capture into the wrong database is the
+    one nothing else can catch.
+    """
+    path = db_path(db)
+    text = _put_bare(_trip_text(db, path), "checkin", first)
+    path.write_text(_put_bare(text, "checkout", last), encoding="utf-8")
     return path
 
 

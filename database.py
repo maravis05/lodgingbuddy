@@ -11,6 +11,14 @@ stays.db.json, and that's the whole scheme: every .db.json in the store folder
 is one, so starting another means naming it and moving between them means
 saying the name once.
 
+Dates are the other reason to have more than one, and the one the tool enforces.
+Move your stay a week and the site quotes you a different price, so a table
+holding both weeks ranks two sets of quotes against each other and hands it to
+whichever week was cheaper. That can't be seen further down — a price is a price
+by the time it reaches the sort — so it is caught at capture: a database is for
+one date range, settled by the first stay in it, and a quote for any other is
+refused. lodgingbuddy.admit is where, config.SPAN is what it reads.
+
 Once, rather than every time — the name is remembered in a pointer file next to
 the databases. Which is exactly why the prompt is named after the database
 you're in, and why `list` says so when it isn't the usual one. A sticky setting

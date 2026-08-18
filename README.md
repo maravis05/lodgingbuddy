@@ -32,7 +32,7 @@ running the script by bare path opens it in whatever owns `.py`.
 | `walk [id]` | Measure walking time to your destinations. `--again` re-measures |
 | `glean [id]` | Re-read stored write-ups and file what they say |
 | `rm <id>...` | Delete stays |
-| `db [name]` | Show or switch the active database. `--new` creates one and asks which city it's in; `--city <name>` sets that without asking |
+| `db [name]` | Show or switch the active database. `--new` creates one and asks which city it's in; `--city <name>` sets that without asking; `--dates <from>..<to>` says which dates it's for |
 | `watch` | The prompt; also what runs when no command is given |
 
 `<id>` matches, in order: the record key (`source:code`), a substring of the
@@ -50,6 +50,48 @@ in it — because that is what typing one at a checkout page is for.
 
 `list --sort` takes `value` (default), `share`, `price`, `score`, `sleeps`,
 `walk`, `points`, `checkin`, `name`.
+
+## One database, one set of dates
+
+Change your dates and the site quotes you a different price. A table holding
+both is not a comparison — it is two comparisons interleaved, and the cheaper
+week wins it regardless of which stay is the better one. Nothing downstream can
+see that: by the time a price reaches the sort it is only a price.
+
+So a database is for one date range, and captures quoted for any other are
+refused rather than filed beside them:
+
+```
+This quote is for 6–9 Nov 2026 — you're in edinburgh, which is for 9–12 Oct 2026.
+Nothing was stored.
+  Start a database for these dates, or ask the site for the ones this one is for:
+    python3 lodgingbuddy.py db <name> --new --dates 2026-11-06..2026-11-09
+```
+
+Nothing is lost by refusing: what you pasted is still on the clipboard and the
+tab is still open, so the way out is whichever of the two you meant.
+
+The range is settled by the first stay captured that carries dates, written
+into `<db>.dbconf.toml` as `checkin` and `checkout`, and every capture after
+that is held to it. A database that already holds stays takes the range they
+share. `db <name> --dates 2026-11-06..2026-11-09` says it before there is
+anything in it to say it for you, and `2026-11-06+3` says the same thing in
+nights. Setting a range that disagrees with the stays already filed is allowed
+— it is the command for correcting one — and says how many stays it just made
+the old dates.
+
+A source that doesn't date its quotes isn't held to anything, since refusing it
+would mean refusing everything it ever captures.
+
+`db` with no name is where the ranges are shown, beside the city and the count.
+That is the screen you read to decide which set you are capturing into, and the
+one place the dates aren't the same string on every row:
+
+```
+  autumn     0 stays       edinburgh
+  edinburgh  31 stays      edinburgh  9–12 Oct 2026
+→ winter      0 stays                  4–7 Dec 2026
+```
 
 ## Getting back to a listing
 
@@ -295,7 +337,8 @@ Stays are a JSON list, one file per database, in the folder holding
 `*.db.json` beside it is another. `db <name>` switches and remembers the choice
 in `.lodgingbuddy-db`; `LODGINGBUDDY_DB` overrides it for one run without moving
 the pointer. A database also keeps `<name>.dbconf.toml` beside its
-`<name>.db.json`, naming the city it is in — see Cities and trips below.
+`<name>.db.json`, naming the city it is in and the dates it is for — see
+Cities and trips below.
 
 Each of the three kinds of file says which kind it is in its own name, so a
 database named after the city it is in is still three files you can tell apart:
@@ -326,6 +369,7 @@ other files live.
 
 | Section | Holds |
 | --- | --- |
+| `checkin`, `checkout` | Which dates the database is for; `<db>.dbconf.toml` only, and normally written by the first capture rather than by hand |
 | `[storage]` | `file` (names the default database and its folder) and `cities` (where city configs live) |
 | `[http]` | User agent, timeout, accept-language for listing fetches |
 | `[tax]` | `vat_rate`, used when a source quotes ex-tax and the page states nothing |
@@ -361,15 +405,20 @@ worth measuring to, what tax is charged and in what currency, and any weights
 that read differently there. These are committed — a city you have worked out
 once is worth keeping and worth someone else having.
 
-`<db>.dbconf.toml` beside `<db>.db.json` names the city and holds whatever is
-true of
+`<db>.dbconf.toml` beside `<db>.db.json` names the city, says which dates the
+trip is for as `checkin` and `checkout`, and holds whatever else is true of
 this trip alone (how many ways the bill splits, a must-have that only matters
-this time). It is one line most of the time, and is not committed.
+this time). It is three lines most of the time, and is not committed.
 
 ```
 db autumn-edinburgh --new       # asks which city; existing names are offered
 db autumn-edinburgh --city edinburgh
+db autumn-edinburgh --dates 2026-11-06..2026-11-09
 ```
+
+The dates are the one setting the tool fills in for itself: the first capture
+that carries any settles them, and after that a quote for other dates is
+refused. See One database, one set of dates above.
 
 Naming a city that has no config starts one from a commented template. Both
 commands print what came with it — how many destinations and landmarks — and

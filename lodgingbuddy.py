@@ -570,6 +570,88 @@ def weekday(iso: str | None) -> str:
         return ""
 
 
+def span_of(rec: dict) -> tuple[str, str] | None:
+    """The dates one stay was quoted for, where it says."""
+    first, last = rec.get("checkin"), rec.get("checkout")
+    return (first, last) if first and last else None
+
+
+def spoken(dates: tuple[str, str]) -> str:
+    """A date range as you'd say it: 9–12 Oct 2026, 28 Sep – 3 Oct 2026."""
+    try:
+        first = dt.date.fromisoformat(dates[0])
+        last = dt.date.fromisoformat(dates[1])
+    except (ValueError, TypeError):
+        return f"{dates[0]} → {dates[1]}"
+    if (first.year, first.month) == (last.year, last.month):
+        return f"{first.day}–{last.day} {first:%b %Y}"
+    if first.year == last.year:
+        return f"{first.day} {first:%b} – {last.day} {last:%b %Y}"
+    return f"{first.day} {first:%b %Y} – {last.day} {last:%b %Y}"
+
+
+def admit(rec: dict, stays: list[dict]) -> str | None:
+    """Whether this capture belongs in the database we're standing in.
+
+    Change your dates and the site quotes you a different price, so a table
+    holding both is not a comparison — it is two comparisons interleaved, and
+    the cheaper week wins it every time regardless of which stay is better.
+    Nothing downstream can see that: a price is a price by the time it reaches
+    the sort. So it is caught here, at the only moment the two dates are both
+    in hand, and caught by refusing rather than by noting.
+
+    Refusing loses nothing. The clipboard still holds what you pasted and the
+    tab is still open, so the way out is whichever of the two you meant —
+    another database, or another date on the site. Saying which is yours.
+
+    A database learns its dates from the first stay that has any, and after
+    that holds every capture to them. Which means the usual way to get one is
+    to capture into it, and `--dates` is for saying so before there's anything
+    in it to say it for you.
+    """
+    theirs = span_of(rec)
+    if not theirs:
+        # A source that doesn't date its quotes can't be held to a range, and
+        # refusing it would only mean refusing everything it ever captures.
+        return None
+
+    db = database.current()
+    held = {span for r in stays if (span := span_of(r))}
+    if config.SPAN:
+        settled = config.SPAN
+    elif len(held) == 1:
+        # Nothing declared, but the stays already agree — that's what it's for.
+        settled = next(iter(held))
+    elif held:
+        # Already mixed, and nothing says which range is the real one. Adopting
+        # either would start refusing captures that match the other.
+        return None
+    else:
+        settled = None
+
+    if settled and theirs != settled:
+        return (f"This quote is for {spoken(theirs)} — you're in {db}, which is "
+                f"for {spoken(settled)}. Nothing was stored.\n"
+                f"  Start a database for these dates, or ask the site for the "
+                f"ones this one is for:\n"
+                f"    {RUN} db <name> --new --dates {theirs[0]}..{theirs[1]}")
+
+    if not config.SPAN:
+        # Written down the first time it's known, so the next capture is judged
+        # against a file rather than against whatever happens to be in the
+        # table — and so an empty database can be wrong about, and say, its
+        # dates before it holds a single stay.
+        config.set_dates(db, *theirs)
+        from_where = (f"what the {len(stays)} already in it are for"
+                      if held else "the first stay in it")
+        print(f"  {db} is for {spoken(theirs)} — {from_where}. Captures for "
+              f"other dates are refused from here on.")
+        # The file moved under a run that has already read it.
+        config.DB = None
+        database.current()
+    return None
+
+
 # ──────────────────────────────── commands ─────────────────────────────────
 
 def cmd_add(args) -> int:
@@ -593,6 +675,12 @@ def cmd_add(args) -> int:
         rec["status"] = sources.OK
 
     stays = load()
+    # Before the merge, so the dates judged are the ones this capture arrived
+    # with rather than the ones a previous capture of the same property left
+    # behind — which is exactly the case this is here to catch.
+    if wrong := admit(rec, stays):
+        print(wrong, file=sys.stderr)
+        return 1
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
     # Status has to be judged after the merge: a price recovered from the
     # previous capture still counts as a price.
@@ -1938,6 +2026,9 @@ def cmd_paste(args) -> int:
     rec["adults"] = args.adults or rec["adults"]
 
     stays = load()
+    if wrong := admit(rec, stays):
+        print(wrong, file=sys.stderr)
+        return 1
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
     # Status has to be judged after the merge: a price recovered from the
     # previous capture still counts as a price.
@@ -2092,6 +2183,66 @@ def attach_city(db: str, city: str) -> None:
               f"landmark{'' if marks == 1 else 's'}.")
 
 
+def dates_from(text: str) -> tuple[str, str]:
+    """A date range as typed: 2026-11-06..2026-11-09, or 2026-11-06+3 nights.
+
+    Nights as well as an end date because a stay is a number of nights and the
+    checkout is arithmetic — and because that arithmetic off by one is the kind
+    of mistake that reads as a price difference later.
+    """
+    said = (text or "").strip()
+    for join in ("..", "/", ":"):
+        if join in said:
+            first, _, last = said.partition(join)
+            break
+    else:
+        first, _, nights = said.partition("+")
+        if not nights:
+            raise ValueError(f"{said!r} isn't a range — 2026-11-06..2026-11-09, "
+                             f"or 2026-11-06+3 for three nights.")
+        try:
+            last = (dt.date.fromisoformat(first.strip())
+                    + dt.timedelta(days=int(nights))).isoformat()
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError(f"{said!r} isn't a date and a number of nights.")
+    try:
+        start = dt.date.fromisoformat(first.strip())
+        end = dt.date.fromisoformat(last.strip())
+    except (ValueError, TypeError):
+        raise ValueError(f"{said!r} wants two dates as YYYY-MM-DD.")
+    if end <= start:
+        raise ValueError(f"{end} isn't after {start} — a stay is at least a night.")
+    return start.isoformat(), end.isoformat()
+
+
+def attach_dates(db: str, text: str) -> None:
+    """Say which dates a database is for, before anything in it says so."""
+    try:
+        span = dates_from(text)
+    except ValueError as exc:
+        print(f"  {exc}", file=sys.stderr)
+        return
+    stays = load()
+    # Said, not refused: this is the command for correcting a range, so the one
+    # thing it mustn't do is refuse to correct it. But a range that disagrees
+    # with what's already filed means every one of those stays is now the wrong
+    # dates for the database holding it, and that is worth hearing once.
+    off = [r for r in stays if (s := span_of(r)) and s != span]
+    other = sorted({span_of(r) for r in off})
+    config.set_dates(db, *span)
+    config.DB = None
+    database.current()
+    print(f"  {db} is for {spoken(span)}.")
+    if off:
+        # The ones that disagree, not everything in the file: a range moved onto
+        # a database half of whose stays already match it should say so about
+        # the half it just orphaned.
+        print(f"  {len(off)} already in it "
+              f"{'is' if len(off) == 1 else 'are'} quoted for "
+              f"{', '.join(spoken(s) for s in other)} — those are the old dates "
+              f"now, and nothing here re-quotes them.")
+
+
 def cmd_db(args) -> int:
     """Which set of stays we're working in, and how to be in a different one.
 
@@ -2111,6 +2262,13 @@ def cmd_db(args) -> int:
                 return 1
             was = database.current()
             database.use(name)
+            # The pointer moved, so everything printed below is about a
+            # different database than the settings loaded above are for. The
+            # city was always read straight off the file and never noticed;
+            # anything asking the settings in force does, and reported the
+            # database we just left.
+            config.DB = None
+            database.current()
         except (ValueError, OSError) as exc:
             print(exc, file=sys.stderr)
             return 1
@@ -2118,6 +2276,19 @@ def cmd_db(args) -> int:
         back = f" `db {was}` goes back to {tally(was)}." if was != name else ""
         print(f"{'Started and now in' if args.new else 'Now in'} {name} — "
               f"{tally(name)}.{back}")
+
+        # Before the city, because it is the one that decides whether the next
+        # capture lands at all, and because attaching a city re-resolves the
+        # settings this would otherwise be writing underneath.
+        if args.dates:
+            attach_dates(name, args.dates)
+        elif config.SPAN:
+            print(f"  For {spoken(config.SPAN)} — captures for other dates are "
+                  f"refused.")
+        else:
+            print(f"  No dates yet — the first capture settles them, and every "
+                  f"one after that has to match. `db {name} --dates <from>..<to>` "
+                  f"says so first.")
 
         # The city, which is most of what the settings are and the one thing
         # nothing else can work out for itself.
@@ -2155,8 +2326,8 @@ def cmd_db(args) -> int:
                   f"still gets read until you unset it.")
         return 0
 
-    if args.new or args.city:
-        flag = "--new" if args.new else "--city"
+    if args.new or args.city or args.dates:
+        flag = "--new" if args.new else "--city" if args.city else "--dates"
         print(f"`db <name> {flag} ...` needs a name.", file=sys.stderr)
         return 1
 
@@ -2165,17 +2336,26 @@ def cmd_db(args) -> int:
     width = max(len(n) for n in names)
     counts = {n: tally(n) for n in names}
     count_width = max(len(c) for c in counts.values())
+    # The dates belong on this screen and nowhere else: it is the one you read
+    # to decide which set you're capturing into, which is the decision they
+    # settle. In the table below they'd be the same string on every row.
+    towns = {n: config.city_of(n) or "" for n in names}
+    town_width = max(len(c) for c in towns.values())
+    spans = {n: spoken(s) if (s := config.dates_of(n)) else "" for n in names}
     for name in names:
         pinned = database.ENV if name == here and database.forced() else ""
         line = (f"{'→' if name == here else ' '} {name.ljust(width)}  "
                 f"{counts[name].ljust(count_width)}"
-                + f"  {config.city_of(name) or ''}"
+                + f"  {towns[name].ljust(town_width)}"
+                + f"  {spans[name]}"
                 + (f"   ({pinned}, for this run only)" if pinned else ""))
         print(line.rstrip())
     spare = [c for c in config.cities()
              if c not in {config.city_of(n) for n in names}]
     print(f"\nIn {config.STORE_DIR}. `db <name>` switches and remembers it; "
-          f"`db <name> --new` starts one and asks which city it's in. The city "
+          f"`db <name> --new` starts one and asks which city it's in. Its dates "
+          f"are settled by the first stay captured into it, and every capture "
+          f"after that has to match them. The city "
           f"is what carries the landmarks, the destinations and the rates, from "
           f"{config.CITIES_DIR}"
           + (f" — also configured there: {', '.join(spare)}." if spare else "."))
@@ -2620,6 +2800,12 @@ def capture_entry(kind: str, payload, total: float | None,
             return None
 
     stays = load()
+    if wrong := admit(rec, stays):
+        # Indented and on stdout like everything else the prompt says back, and
+        # holding nothing: the line after this one is a fresh paste, not a total
+        # belonging to a stay that didn't land.
+        print(textwrap.indent(wrong, "  "))
+        return None
     rec = merge_over(find_exact(stays, key_of(rec)), rec)
     # After the merge, so a typed total beats anything the merge restored.
     if total is not None:
@@ -2665,7 +2851,9 @@ PROMPT_HELP = """\
   `set <id> --look 4 --clean 5` marks the things no site can tell you.
   `list` ends with the links to its top few; `url <id>` fetches any one.
   The prompt is named after the database you're capturing into. `db` lists
-  them, `db <name>` moves to another, `db <name> --new` starts one.
+  them, `db <name>` moves to another, `db <name> --new` starts one. Each is
+  for one set of dates — the first capture settles them, and a quote for any
+  other dates is refused rather than filed beside them.
   `quit` leaves. Ctrl-C clears the line. Ctrl-D quits too, but only on
   Linux and macOS — on Windows, end-of-file is Ctrl-Z then enter."""
 
@@ -2936,6 +3124,10 @@ def main() -> int:
                    help="which city it's in, which is where its landmarks, "
                         "destinations and rates come from; starts a config for "
                         "that city if there isn't one")
+    d.add_argument("--dates", metavar="FROM..TO",
+                   help="which dates it's for, e.g. 2026-11-06..2026-11-09 or "
+                        "2026-11-06+3; captures quoted for any other dates are "
+                        "refused. Settled by the first capture if not given")
     d.set_defaults(func=cmd_db)
 
     rm = sub.add_parser("rm", help="remove one or more stays")
