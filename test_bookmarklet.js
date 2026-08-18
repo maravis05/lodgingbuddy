@@ -489,6 +489,136 @@ function checkUnits() {
   return failed;
 }
 
+// Booking.com's own page state, verbatim from a capture of an Oban listing on
+// 18 Aug 2026 — an Apollo cache in a plain application/json script tag, keyed
+// by the same block id sr_pri_blocks carries. Trimmed to the price node; the
+// empty originalRoomPrice/totalPriceBeforeDiscounts siblings are kept because
+// they are what an undiscounted offer really looks like, and reading a zero
+// out of one of those is the mistake this shape invites.
+const STORE = {
+  "currency": "USD",
+  "Property:{\"id\":16938813}": { "hotelCurrencyCode": "GBP" },
+  "PriceDisplayInfoPerOffer:1693881301_441033811_4_0_0": {
+    "priceDisplayInfoRL": {
+      "defaultBreakdown": {
+        "__typename": "PriceBreakdownVM",
+        "discounts": [],
+        "originalRoomPrice": {
+          "amountPerStay": { "amountUnformatted": 0, "currency": "" },
+          "amountPerStayInHotelCur": null
+        },
+        "totalPriceBeforeDiscounts": {
+          "amountPerStay": { "amountUnformatted": 0, "currency": "" },
+          "amountPerStayInHotelCur": null
+        },
+        "totalPrice": {
+          "text": "Total",
+          "amountPerStay": {
+            "amount": "$422.39", "amountUnformatted": 422.3862966759382,
+            "currency": "USD"
+          },
+          "amountPerStayInHotelCur": {
+            "amount": "\u00a3311.67", "amountUnformatted": 311.66669999900023,
+            "currency": "GBP"
+          }
+        },
+        "additionalPriceInformation": {
+          "chargesIncluded": null,
+          "chargesExcluded": {
+            "amount": {
+              "amount": "$84.48", "amountUnformatted": 84.47720512545865,
+              "currency": "USD"
+            },
+            "copy": [{ "text": "Excludes $84.48 in taxes and fees" }],
+            "itemType": "charge",
+            "breakdown": [{
+              "amount": { "amountUnformatted": 84.47720512545857, "currency": "USD" },
+              "copy": [{ "text": "20 % VAT" }]
+            }]
+          }
+        }
+      }
+    }
+  }
+};
+
+const STORE_URL =
+  "https://www.booking.com/hotel/gb/feochan-view.html" +
+  "?checkin=2026-10-12&checkout=2026-10-14&group_adults=3&no_rooms=1" +
+  "&sr_pri_blocks=1693881301_441033811_4_0_0__31167";
+
+const STORE_CASES = [
+    {
+      name: "the store prices the offer the URL priced",
+      store: STORE, url: STORE_URL,
+      text: "Feochan View\nEntire home\n$422\n2 nights, 3 adults",
+      want: { native: 311.67, cur: "GBP", display: 422.39, dcur: "USD",
+              taxes: [["20 % VAT", 0.2]] }
+    },
+    {
+      name: "no discount on the page, and the pair is captured anyway",
+      store: STORE, url: STORE_URL,
+      text: "Feochan View\nEntire home\n2 nights, 3 adults",  // no price text at all
+      want: { native: 311.67, cur: "GBP", display: 422.39, dcur: "USD",
+              taxes: [["20 % VAT", 0.2]] }
+    },
+    {
+      name: "the offer states no excluded charges, so nothing is added",
+      store: (() => {
+        const s = JSON.parse(JSON.stringify(STORE));
+        s["PriceDisplayInfoPerOffer:1693881301_441033811_4_0_0"]
+         .priceDisplayInfoRL.defaultBreakdown
+         .additionalPriceInformation.chargesExcluded = null;
+        return s;
+      })(),
+      url: STORE_URL,
+      text: "Feochan View\nEntire home\n$422\nExcluded: 20 % VAT",  // text says otherwise
+      want: { native: 311.67, cur: "GBP", display: 422.39, dcur: "USD", taxes: [] }
+    },
+    // A store that prices some other offer says nothing about this one, and the
+    // fallbacks are what a page with no store has always used: the country for
+    // the currency, the room block's own words for the rates, and no pair.
+    {
+      name: "a store for some other offer is not this offer's price",
+      store: STORE,
+      url: STORE_URL.replace("1693881301_441033811_4_0_0__31167",
+                             "9999999901_111111111_0_0_0__31167"),
+      text: "Feochan View\nEntire home\n$422\nExcluded: 20 % VAT\n2 nights",
+      want: { native: 311.67, cur: "GBP", display: null, dcur: null,
+              taxes: [["VAT", 0.2]] }
+    },
+  ];
+
+// The page state answers three questions the rendered text only hints at, and
+// this checks all of them against numbers taken off a real page.
+function checkStore() {
+  let failed = 0;
+  for (const c of STORE_CASES) {
+    const rec = extract({ url: c.url, host: "www.booking.com", jsonld: [],
+                          next: null, store: c.store, text: c.text, dom: {} });
+    const taxes = rec.taxes && rec.taxes.map(t => [t.label, t.rate]);
+    const problems = [];
+    const check = (what, got, want) => {
+      if (JSON.stringify(got) !== JSON.stringify(want)) {
+        problems.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+      }
+    };
+    check("native", rec.native_price, c.want.native);
+    check("native_currency", rec.native_currency, c.want.cur);
+    check("display", rec.display_price, c.want.display);
+    check("display_currency", rec.display_currency, c.want.dcur);
+    check("taxes", taxes, c.want.taxes);
+    if (problems.length) {
+      failed++;
+      console.log(`FAIL  ${c.name}`);
+      for (const p of problems) console.log(`      ${p}`);
+    } else {
+      console.log(`ok    ${c.name}`);
+    }
+  }
+  return failed;
+}
+
 function checkSources() {
   let failed = 0;
   for (const c of SOURCE_CASES) {
@@ -581,9 +711,9 @@ function checkRooms() {
 const [, , path, url] = process.argv;
 if (!path && !url) {
   const failed = checkRooms() + checkCharges() + checkSources() + checkUnits() +
-                 checkBlocks();
+                 checkBlocks() + checkStore();
   const total = CASES.length + CHARGE_CASES.length + SOURCE_CASES.length +
-                UNIT_CASES.length + BLOCK_CASES.length;
+                UNIT_CASES.length + BLOCK_CASES.length + STORE_CASES.length;
   console.log(failed ? `\n${failed} failed` : `\n${total} passed`);
   process.exit(failed ? 1 : 0);
 }

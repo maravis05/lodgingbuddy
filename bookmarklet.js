@@ -92,6 +92,23 @@
     var nd = null;
     var el = document.getElementById("__NEXT_DATA__");
     if (el) { try { nd = JSON.parse(el.textContent); } catch (e) { /* skip */ } }
+    // Booking.com ships its page state as an Apollo cache in a plain JSON
+    // script tag, and it holds the priced offer's total in both currencies and
+    // the charges it excludes as an amount — the three things this tool spent
+    // its life inferring from rendered text. Found by content rather than by
+    // the tag's attributes, which are a hash that will change:
+    // data-capla-namespace="b-property-web-property-pagecffdeDAT" is a build
+    // id, and a selector written against it works until the next deploy.
+    var store = null;
+    var blobs = document.querySelectorAll('script[type="application/json"]');
+    for (var b = 0; b < blobs.length && !store; b++) {
+      var raw = blobs[b].textContent || "";
+      if (raw.indexOf("PriceDisplayInfoPerOffer:") < 0) continue;
+      try {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") store = parsed;
+      } catch (e) { /* not ours */ }
+    }
     var dom = {};
     try { dom = domFacts(); } catch (e) { /* a page we don't know: no loss */ }
     return {
@@ -100,6 +117,7 @@
       jsonld: lds,
       next: nd,
       dom: dom,
+      store: store,
       text: document.body ? document.body.innerText : ""
     };
   }
@@ -484,6 +502,72 @@
     no: "NOK", se: "SEK", dk: "DKK", pl: "PLN", is: "ISK"
   };
 
+  // What Booking's own page state says about the offer the URL priced.
+  //
+  // The Apollo cache keys each offer by the same block id sr_pri_blocks carries,
+  // so the priced one can be picked out rather than inferred from where a room
+  // sits on the page. What comes back is two ratios and nothing absolute, which
+  // is deliberate: the store prices one offer and the URL may have taken it
+  // twice, and a ratio is the same either way where an amount is half the
+  // booking. Both are exact, both come off the same object:
+  //
+  //   totalPrice.amountPerStay              $422.39   the display currency
+  //   totalPrice.amountPerStayInHotelCur    £311.67   the property's own
+  //   chargesExcluded.amount                 $84.48   "Excludes $84.48 in
+  //                                                    taxes and fees"
+  //
+  // 422.3863 / 311.6667 is the exchange rate on the page, to five figures, with
+  // no discount needed to make it visible. 84.4772 / 422.3863 is 0.200000 —
+  // what the checkout adds — and it is a ratio of two of the site's own numbers,
+  // so it holds whatever the internal decomposition was: taxes on a room rate
+  // with a cleaning fee already inside it come out right without this having to
+  // know that any of that happened.
+  //
+  // An offer that states no excluded charges reports zero, which is a fact and
+  // not a gap: it is the property that adds nothing at the end.
+  function offerPrices(store, ids) {
+    if (!store || !ids || !ids.length) return null;
+    var keys = Object.keys(store), key = null;
+    for (var i = 0; i < keys.length && !key; i++) {
+      if (keys[i].indexOf("PriceDisplayInfoPerOffer:") !== 0) continue;
+      for (var j = 0; j < ids.length; j++) {
+        if (keys[i].indexOf(ids[j]) > -1) { key = keys[i]; break; }
+      }
+    }
+    if (!key) return null;
+    var node = store[key] || {};
+    var info = node.priceDisplayInfoRL || node;
+    var bd = info.defaultBreakdown || info;
+    var price = bd.totalPrice || {};
+    var shown = price.amountPerStay, home = price.amountPerStayInHotelCur;
+    if (!shown || !home) return null;
+    var s = shown.amountUnformatted, h = home.amountUnformatted;
+    if (!(s > 0) || !(h > 0) || !shown.currency || !home.currency) return null;
+
+    var out = {
+      rate: s / h, shown_currency: shown.currency, home_currency: home.currency,
+      excluded: 0, labels: []
+    };
+    var extra = bd.additionalPriceInformation || {};
+    var ex = extra.chargesExcluded;
+    // Only against a figure in the same currency as the total it is a fraction
+    // of. Dividing dollars by pounds would produce a number, and the number
+    // would be a plausible-looking tax rate.
+    if (ex && ex.amount && ex.amount.amountUnformatted > 0 &&
+        ex.amount.currency === shown.currency) {
+      out.excluded = ex.amount.amountUnformatted / s;
+      var items = ex.breakdown || [];
+      for (var k = 0; k < items.length && out.labels.length < 4; k++) {
+        var copy = (items[k] || {}).copy || [];
+        for (var c = 0; c < copy.length; c++) {
+          var said = (copy[c] || {}).text;
+          if (said && out.labels.indexOf(said) < 0) out.labels.push(said);
+        }
+      }
+    }
+    return out;
+  }
+
   // Where a room offers several rate plans the section states these lines once
   // per plan, and this reads the first. Taken as deliberate: the tax a city
   // levies doesn't depend on whether you can cancel, and a fee for cleaning the
@@ -799,6 +883,18 @@
       // inferred from parseCharges having found nothing.
       else if (!/excluded\s*:/i.test(ctx.text || "")) rec.taxes = [];
       if (charges.fees_included) rec.fees_included = charges.fees_included;
+      // And the site's own arithmetic beats reading its mind. One rate, not the
+      // itemisation, because the items compound — 20% VAT then 5% city tax is
+      // 1.26 and not 1.25, and their amounts divided back out individually
+      // would be 20% and 6% and then compounded again to 1.272. The aggregate
+      // is what the page charges. Its label is the itemisation, said in the
+      // page's own words, so `show` still names what is in it.
+      //
+      // No fees_included alongside it: that field means "carve this out before
+      // taxing", and the store's fraction is already of the whole total, fee
+      // and all. Carving anything out of it would be correcting arithmetic
+      // that is already right.
+      // (applied below, once the block ids the store is keyed by are in hand)
 
       // Booking.com encodes the selected blocks' prices in sr_pri_blocks, as
       // minor units on the end: ..._5_0_0__29363 means 293.63. That beats
@@ -890,9 +986,21 @@
             // which is the true thing, and `set --sleeps` is one word.
             rec.sleeps = null;
           }
+          // What the page's own state says about this exact offer, keyed by
+          // the block id sr_pri_blocks carries. Everything below prefers it and
+          // falls back to the reading-the-rendered-text version, which is what
+          // still answers for a page that ships no store and for every other
+          // site.
+          var offer = null;
+          try { offer = offerPrices(ctx.store, ids); }
+          catch (e) { offer = null; }   /* a shape we don't know: no loss */
+
           // The property's country, off the URL, says which currency that is;
           // a fee quoted with a symbol says so outright and is believed first.
+          // The store beats both, since it names the currency rather than
+          // implying it from where the building is.
           rec.native_currency =
+            (offer && offer.home_currency) ||
             (charges.fees_included && charges.fees_included[0].currency) ||
             (m && COUNTRY_CURRENCY[m[1]]) || null;
           // Pre-tax room rate, not the bill. With rates and fees read off the
@@ -909,18 +1017,44 @@
           // the table in dollars was to hard-code what a pound was worth.
           //
           // Both halves have to describe the same thing or the ratio is not a
-          // rate. One block only, so the block price and the cheapest price on
-          // screen are the same one room; the cheapest current price, because
-          // that is the plan sr_pri_blocks encodes; and no tax adjustment on
-          // either side, because Booking quotes this account pre-tax in both
-          // currencies at once. A ratio outside the band is a pairing that went
-          // wrong somewhere, and is dropped rather than averaged in.
-          var shown = current.length ? Math.min.apply(null, current) : null;
-          if (ids.length === 1 && shown && money.currency &&
-              money.currency !== rec.native_currency &&
-              shown / amount >= 0.2 && shown / amount <= 5) {
-            rec.display_price = shown;
-            rec.display_currency = money.currency;
+          // rate, and the store states both halves of one offer outright. It is
+          // applied to the summed booking rather than copied: the store prices
+          // the offer, the URL may have taken it twice, and a rate is the same
+          // number either way where an amount is half the answer.
+          //
+          // What this replaces only worked on a discounted listing. The screen
+          // reading below needs Booking's "Current price" wording to know which
+          // figure on the page is the payable one, and Booking only writes it
+          // where there is a struck-through price beside it. So a plain listing
+          // captured no pair at all, the database ended up with nothing to read
+          // a rate off, and the table stayed in pounds however the settings
+          // read. It survives as the fallback for a page with no store.
+          if (offer && offer.shown_currency !== rec.native_currency &&
+              offer.rate >= 0.2 && offer.rate <= 5) {
+            rec.display_price = Math.round(amount * offer.rate * 100) / 100;
+            rec.display_currency = offer.shown_currency;
+          } else {
+            var shown = current.length ? Math.min.apply(null, current) : null;
+            if (ids.length === 1 && shown && money.currency &&
+                money.currency !== rec.native_currency &&
+                shown / amount >= 0.2 && shown / amount <= 5) {
+              rec.display_price = shown;
+              rec.display_currency = money.currency;
+            }
+          }
+
+          // And what the checkout will add, as the site's own fraction of its
+          // own total rather than a rate read out of a sentence.
+          if (offer) {
+            rec.taxes = offer.excluded > 0
+              ? [{ label: offer.labels.join(", ") || "taxes and fees",
+                   rate: Math.round(offer.excluded * 1e6) / 1e6 }]
+              : [];
+            // That fraction is of the whole total, fee and all, so nothing is
+            // carved out before it applies. fees_included means the opposite,
+            // and leaving it set would subtract the fee from a sum that already
+            // had it in.
+            if (offer.excluded > 0) rec.fees_included = null;
           }
         }
       }

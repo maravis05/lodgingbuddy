@@ -68,6 +68,15 @@ def blank_record() -> dict:
         # What the quoted price leaves out, where the page said so plainly:
         # [{"label": "VAT", "rate": 0.20}, {"label": "City tax", "rate": 0.05}]
         # and [{"label": "Cleaning fee", "amount": 78, "currency": "GBP"}].
+        #
+        # `taxes` has three states, not two. A list is what the page said, []
+        # is the page saying it adds nothing — a real answer, and common, since
+        # a property under the VAT threshold charges none — and None is nobody
+        # having read it, which is the only one the flat VAT estimate stands in
+        # for. Where Booking's page state was readable the list is a single
+        # aggregate entry carrying the site's own wording, because its itemised
+        # amounts compound and dividing them back out one at a time doesn't
+        # reconstruct the rates that produced them.
         # Rates rather than a total, because the rates are the durable fact —
         # and together they are what makes the checkout number derivable
         # without going to the checkout. Taxes compound; an included fee is

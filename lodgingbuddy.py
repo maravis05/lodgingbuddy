@@ -106,8 +106,15 @@ def load() -> list[dict]:
 
 
 def save(stays: list[dict]) -> None:
+    global RATE
     database.path().write_text(json.dumps(stays, indent=2) + "\n",
                                encoding="utf-8")
+    # In step with what is now on disk, the same way `load` leaves it. Every
+    # command that captures prints a figure straight after saving, and the rate
+    # in hand at that moment was worked out before the stay existed — so the
+    # first capture into an empty database quoted pounds at you about a table
+    # that reads in dollars from the moment it has a row in it.
+    RATE = rate_from(stays)
 
 
 def key_of(rec: dict) -> str:
@@ -232,10 +239,17 @@ def with_stated_charges(price: float, cur: str, rec: dict) -> float | None:
 
 
 def stated_charges_note(rec: dict) -> str:
-    """The sum in words: which rates went on, and what wasn't taxed."""
+    """The sum in words: which rates went on, and what wasn't taxed.
+
+    A label that already says its own percentage doesn't get another bolted on
+    the front. Booking's page state names each charge the way it prints it —
+    "20 % VAT" — and prefixing the rate we worked out turned that into
+    "20% 20 % VAT".
+    """
     if not rec.get("taxes"):
         return "the page listed nothing excluded, so that is the whole bill"
-    parts = [f"{t.get('rate', 0):.0%} {t.get('label') or 'tax'}"
+    parts = [(t.get("label") or "tax") if "%" in (t.get("label") or "")
+             else f"{t.get('rate', 0):.0%} {t.get('label') or 'tax'}"
              for t in rec.get("taxes") or []]
     note = "the page's own rates applied: " + " then ".join(parts)
     fees = [f for f in rec.get("fees_included") or [] if f.get("amount")]
