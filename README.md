@@ -32,7 +32,7 @@ running the script by bare path opens it in whatever owns `.py`.
 | `walk [id]` | Measure walking time to your destinations. `--again` re-measures |
 | `glean [id]` | Re-read stored write-ups and file what they say |
 | `rm <id>...` | Delete stays |
-| `db [name]` | Show or switch the active database. `--new` creates one and asks which city it's in; `--city <name>` sets that without asking; `--dates <from>..<to>` says which dates it's for |
+| `db [name]` | Show or switch the active database. `--new` creates one and asks which city it's in; `--city <name>` sets that without asking; `--dates <from>..<to>` says which dates it's for; `--from <db>` starts it from another database's stays, re-dated |
 | `watch` | The prompt; also what runs when no command is given |
 
 `<id>` matches, in order: the record key (`source:code`), a substring of the
@@ -82,6 +82,38 @@ the old dates.
 
 A source that doesn't date its quotes isn't held to anything, since refusing it
 would mean refusing everything it ever captures.
+
+### Moving a shortlist onto other dates
+
+```
+db november --new --dates 2026-11-06+3 --from edinburgh
+```
+
+The work in a shortlist isn't the prices. It is thirty properties found, a
+router asked about each one, write-ups read, and a look and a clean typed in by
+hand — and none of that changed when the dates did. So a fork carries all of it
+and drops only the quote: price, currency, tax basis, stated charges, which
+rate it was, and the dates themselves. It takes the city with it, and doesn't
+ask you for one.
+
+The links come over re-dated. A Booking.com link puts its dates in the query
+string, so the new one asks for the new week with the same room block still
+selected — `highlighted_blocks` names the room, and unlike the price a room
+type outlives the dates it was offered on. `sr_pri_blocks` is dropped: it
+carries the price of the search that produced the link, in minor units on the
+end of the block id, and keeping it would file October's price as November's
+quote silently and always in the same direction. The three session parameters
+go with it.
+
+cottages.com and Hoseasons links re-date the same way (`start` is
+day-month-year, plus `nights`). Sykes puts no date in a link at all — it
+publishes one "from" figure and asks for the dates on the page — so those come
+over with their links untouched, and the fork says which ones so you know what
+to search by hand.
+
+Then `url` prints the re-dated links in sort order and the bookmarklet fills
+the quotes back in. That is the one part that has to be asked of the site
+again, because it is the one part that actually changed.
 
 `db` with no name is where the ranges are shown, beside the city and the count.
 That is the screen you read to decide which set you are capturing into, and the
@@ -154,12 +186,24 @@ currency in place. A blank line ends a run of pasted summary text.
 
 Four sites have adapters, and they yield different amounts:
 
-| Site | Parser | What comes back |
-| --- | --- | --- |
-| sykescottages.co.uk | `sykes` | Full scrape from schema.org JSON-LD: name, coordinates, occupancy, bedrooms, beds, amenities, rating, price |
-| cottages.com | `awaze` | `__NEXT_DATA__`, when the AWS WAF lets the page through; URL query otherwise |
-| hoseasons.co.uk | `awaze` | Same platform, same parser |
-| booking.com | `booking` | URL parameters only — the page is WAF-locked. Dates, party size, and the search's price block if the link carries one |
+| Site | Parser | What comes back | Re-datable link |
+| --- | --- | --- | --- |
+| sykescottages.co.uk | `sykes` | Full scrape from schema.org JSON-LD: name, coordinates, occupancy, bedrooms, beds, amenities, rating, price | No — no date in the URL |
+| cottages.com | `awaze` | `__NEXT_DATA__`, when the AWS WAF lets the page through; URL query otherwise | Yes — `start`, `nights` |
+| hoseasons.co.uk | `awaze` | Same platform, same parser | Yes — `start`, `nights` |
+| booking.com | `booking` | URL parameters only — the page is WAF-locked. Dates, party size, and the search's price block if the link carries one | Yes — `checkin`, `checkout` |
+
+The last column is what `db --from` can rewrite. Note that it and the price
+column don't overlap: the two sites that date their links are the two whose
+pages are behind a WAF, and the one that serves its page publishes a "from"
+figure rather than a quote for dates. So there is no unattended re-quote from
+any of them — a fork re-dates the links and the bookmarklet does the rest.
+
+Re-dating never carries a price across. Booking's `sr_pri_blocks` holds the
+price of the search that made the link and is dropped rather than rewritten,
+which is checkable: `booking_blocks()` on a re-dated link returns no price at
+all, so a `refresh` over a forked database reports "details only" and cannot
+file the old week's figure as the new week's quote.
 
 `add` on a `/Share-` link follows exactly one redirect, which is where
 Booking.com's dates and party size live; the second redirect strips them.

@@ -676,6 +676,74 @@ def awaze(url: str, site: dict) -> dict:
 ADAPTERS = {"booking": booking, "sykes": sykes, "awaze": awaze}
 
 
+# ───────────────────────── the same listing, other dates ───────────────────
+
+def _requery(url: str, put: dict[str, str], drop: tuple[str, ...] = ()) -> str:
+    """One URL with some query parameters set and others taken out."""
+    parts = urllib.parse.urlsplit(url)
+    q = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+    for key in drop:
+        q.pop(key, None)
+    for key, value in put.items():
+        q[key] = [value]
+    return urllib.parse.urlunsplit(
+        parts._replace(query=urllib.parse.urlencode(q, doseq=True)))
+
+
+# Dropped rather than carried, and this is the one that matters: sr_pri_blocks
+# holds the price of the search that produced the link, in minor units on the
+# end of the block id, and booking_blocks reads it. Carry it across a change of
+# dates and October's price arrives filed as November's quote — silently, and
+# always in the same direction. The other three identify a browsing session
+# that ended, and say who was browsing.
+BOOKING_STALE = ("sr_pri_blocks", "sid", "srepoch", "srpvid")
+
+
+def booking_dates(url: str, span: tuple[str, str]) -> str:
+    """Booking.com: checkin and checkout are query parameters.
+
+    highlighted_blocks and matching_block_id are kept. They name the room the
+    price in the table was for, which is what makes the new quote the same
+    comparison rather than a different one at the same address — and unlike the
+    price, a room type outlives the dates it was offered on.
+    """
+    return _requery(url, {"checkin": span[0], "checkout": span[1]},
+                    BOOKING_STALE)
+
+
+def awaze_dates(url: str, span: tuple[str, str]) -> str:
+    """cottages.com and Hoseasons: start is day-month-year, plus nights."""
+    start = dt.date.fromisoformat(span[0]).strftime("%d-%m-%Y")
+    return _requery(url, {"start": start,
+                          "nights": str(nights_between(*span) or "")})
+
+
+# Keyed by parser, like ADAPTERS, and deliberately not covering all of them.
+# Sykes puts no date in its links at all — it publishes one "from" figure and
+# asks for the dates on the page — so there is nothing in a Sykes URL to
+# rewrite, and pretending otherwise would hand back the same link with a new
+# name and let it look re-dated.
+REDATERS = {"booking": booking_dates, "awaze": awaze_dates}
+
+
+def redated(url: str, span: tuple[str, str]) -> str | None:
+    """The same listing asked for different dates, where the link says dates.
+
+    None where it doesn't — a link that can't be re-dated has to be visibly
+    that, because the alternative is handing back a URL still carrying the old
+    week and calling it the new one.
+    """
+    host = urllib.parse.urlsplit(url or "").netloc.lower()
+    if not host:
+        return None
+    for site in config.SOURCES:
+        domain = str(site.get("domain") or "").lower()
+        if domain and domain in host:
+            fn = REDATERS.get(site.get("parser"))
+            return fn(url, span) if fn else None
+    return None
+
+
 def site_for(rec: dict) -> dict:
     """What config.toml says about the site a record came from.
 

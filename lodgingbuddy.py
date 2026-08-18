@@ -2215,13 +2215,8 @@ def dates_from(text: str) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def attach_dates(db: str, text: str) -> None:
+def attach_dates(db: str, span: tuple[str, str]) -> None:
     """Say which dates a database is for, before anything in it says so."""
-    try:
-        span = dates_from(text)
-    except ValueError as exc:
-        print(f"  {exc}", file=sys.stderr)
-        return
     stays = load()
     # Said, not refused: this is the command for correcting a range, so the one
     # thing it mustn't do is refuse to correct it. But a range that disagrees
@@ -2243,6 +2238,78 @@ def attach_dates(db: str, text: str) -> None:
               f"now, and nothing here re-quotes them.")
 
 
+# What a quote is, as against what a property is. Every one of these is true of
+# one search on one set of dates and of nothing else, so a fork drops them and
+# keeps everything it doesn't name: where the place is, how big it is, what the
+# write-up said, how far the router walked it, and the marks you typed yourself.
+# That is the half of a shortlist that took the work, and none of it moved when
+# the dates did.
+QUOTED = ("price", "was_price", "currency", "tax_included",
+          "native_price", "native_currency", "display_price",
+          "display_currency", "price_basis", "taxes", "fees_included",
+          "offer", "checkin", "checkout", "nights", "captured_at")
+
+
+def forked(rec: dict, span: tuple[str, str]) -> tuple[dict, bool]:
+    """One stay asked for different dates, and whether its link came too."""
+    fresh = dict(rec)
+    for field in QUOTED:
+        fresh[field] = None
+    fresh["checkin"], fresh["checkout"] = span
+    fresh["nights"] = sources.nights_between(*span)
+    fresh["status"] = sources.NEEDS_PRICE
+    link = sources.redated(rec.get("url") or "", span)
+    if link:
+        fresh["url"] = link
+    return fresh, bool(link)
+
+
+def fork_from(old: str, new: str, span: tuple[str, str]) -> str | None:
+    """Carry a shortlist onto different dates. Says which city came with it.
+
+    The work in a shortlist isn't the prices. It is thirty properties found, a
+    router asked about each one, write-ups read, and a look and a clean typed in
+    by hand — and none of that changed when the dates did. Re-finding all of it
+    to ask the same thirty places about a different week is the reason you would
+    put up with one mixed table instead, which is the thing this is here to make
+    unnecessary.
+
+    So everything but the quote comes over, the links are re-dated to the new
+    week with the same room block selected, and the prices are left empty for
+    the bookmarklet to fill — which is the one part that has to be asked of the
+    site again, because it is the one part that actually changed.
+    """
+    try:
+        was = json.loads(database.path_of(old).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"  nothing carried over — can't read {old}: {exc}",
+              file=sys.stderr)
+        return None
+    if not was:
+        print(f"  {old} is empty, so there was nothing to carry.")
+        return None
+
+    carried = [forked(rec, span) for rec in was]
+    stuck = [rec for rec, moved in carried if not moved]
+    # Into the database we have already switched into, which is `new` — this is
+    # called from `db` after the pointer has moved.
+    save([rec for rec, _ in carried])
+
+    print(f"  Carried {len(carried)} over from {old}: the places, what the "
+          f"write-ups said, the measured walks and your own marks. Not the "
+          f"prices — those were {spoken(span_of(was[0])) if span_of(was[0]) else 'the old dates'}.")
+    if moved := len(carried) - len(stuck):
+        print(f"  {moved} link{'' if moved == 1 else 's'} re-dated to "
+              f"{spoken(span)}, same room block, no price on them. `url` prints "
+              f"them; the bookmarklet fills the quotes back in.")
+    if stuck:
+        print(f"  {len(stuck)} put no dates in the link and were left as they "
+              f"are, so those want asking by hand: "
+              + ", ".join(sorted(r.get("name") or "?" for r in stuck)[:4])
+              + (", …" if len(stuck) > 4 else ""))
+    return config.city_of(old)
+
+
 def cmd_db(args) -> int:
     """Which set of stays we're working in, and how to be in a different one.
 
@@ -2250,6 +2317,30 @@ def cmd_db(args) -> int:
     typed once. The cost of that is a mode you can forget you're in, which is
     why both branches here end by naming the way back.
     """
+    span = None
+    if args.dates:
+        try:
+            span = dates_from(args.dates)
+        except ValueError as exc:
+            # Before anything switches or is started, so a typo in the range
+            # leaves you where you were rather than in a new database that
+            # couldn't be given the dates it was started for.
+            print(exc, file=sys.stderr)
+            return 1
+
+    if args.from_db and not (args.new and args.dates):
+        # Both, and for different reasons. Without --dates there is nothing to
+        # re-date the links to, and the copy would land on the same week as the
+        # database it came from — two tables of the same quotes. Without --new
+        # it would fold a shortlist into whatever is already there, which is the
+        # mixed table this whole thing exists to prevent.
+        missing = " and ".join(x for x in ("--new" if not args.new else "",
+                                           "--dates" if not args.dates else "")
+                               if x)
+        print(f"`--from` needs {missing} — a fork is a new database for a "
+              f"different set of dates.", file=sys.stderr)
+        return 1
+
     if args.name:
         try:
             name = database.name_of(args.name)
@@ -2280,8 +2371,8 @@ def cmd_db(args) -> int:
         # Before the city, because it is the one that decides whether the next
         # capture lands at all, and because attaching a city re-resolves the
         # settings this would otherwise be writing underneath.
-        if args.dates:
-            attach_dates(name, args.dates)
+        if span:
+            attach_dates(name, span)
         elif config.SPAN:
             print(f"  For {spoken(config.SPAN)} — captures for other dates are "
                   f"refused.")
@@ -2290,9 +2381,15 @@ def cmd_db(args) -> int:
                   f"one after that has to match. `db {name} --dates <from>..<to>` "
                   f"says so first.")
 
+        carried = fork_from(args.from_db, name, span) if args.from_db else None
+
         # The city, which is most of what the settings are and the one thing
-        # nothing else can work out for itself.
-        city = args.city or (ask_city(name) if args.new else None)
+        # nothing else can work out for itself. A fork is in the same city as
+        # the database it came from — different dates, same place — so it is
+        # carried rather than asked about.
+        city = args.city or carried or (ask_city(name)
+                                        if args.new and not args.from_db
+                                        else None)
         if city:
             attach_city(name, city)
             # The pointer moved and so did the file under it; re-resolve so the
@@ -2326,8 +2423,9 @@ def cmd_db(args) -> int:
                   f"still gets read until you unset it.")
         return 0
 
-    if args.new or args.city or args.dates:
-        flag = "--new" if args.new else "--city" if args.city else "--dates"
+    if args.new or args.city or args.dates or args.from_db:
+        flag = ("--new" if args.new else "--city" if args.city
+                else "--dates" if args.dates else "--from")
         print(f"`db <name> {flag} ...` needs a name.", file=sys.stderr)
         return 1
 
@@ -2853,7 +2951,9 @@ PROMPT_HELP = """\
   The prompt is named after the database you're capturing into. `db` lists
   them, `db <name>` moves to another, `db <name> --new` starts one. Each is
   for one set of dates — the first capture settles them, and a quote for any
-  other dates is refused rather than filed beside them.
+  other dates is refused rather than filed beside them. Changed your dates?
+  `db <new> --new --dates <from>..<to> --from <old>` carries the shortlist
+  over with its links re-dated, and leaves the prices for you to capture.
   `quit` leaves. Ctrl-C clears the line. Ctrl-D quits too, but only on
   Linux and macOS — on Windows, end-of-file is Ctrl-Z then enter."""
 
@@ -3128,6 +3228,10 @@ def main() -> int:
                    help="which dates it's for, e.g. 2026-11-06..2026-11-09 or "
                         "2026-11-06+3; captures quoted for any other dates are "
                         "refused. Settled by the first capture if not given")
+    d.add_argument("--from", dest="from_db", metavar="DB",
+                   help="start it from the stays in another database, asked "
+                        "for the new dates: everything but the prices comes "
+                        "over and the links are re-dated. Needs --new --dates")
     d.set_defaults(func=cmd_db)
 
     rm = sub.add_parser("rm", help="remove one or more stays")
